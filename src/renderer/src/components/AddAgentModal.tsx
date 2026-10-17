@@ -6,7 +6,8 @@ import { SpritePortrait } from './SpritePortrait';
 import { Icon } from './Icon';
 import { ProviderLogo } from './ProviderLogo';
 import { useStore, type Agent } from '@/store/store';
-import { OFFICE_CAST, DEFAULT_CHARACTER, type OfficeCharacterName } from '@/scene/office/cast';
+import { CAST, DEFAULT_CHARACTER, type CharacterName } from '@/scene/office/cast';
+import { useThemeCast } from '@/hooks/useThemeCast';
 import { type AccentColorName } from '@/design/tokens';
 import type { HireManifest } from '@shared/hire';
 import { hireQueueProgress } from '@shared/hireQueue';
@@ -91,7 +92,7 @@ Return EXACTLY this shape (omit optional fields you don't need; keep the spec st
 
 {
   "spec": "munder-difflin/hire@1",
-  "name": "Jim",
+  "name": "Ben",
   "description": "one-line role — what this agent is for",
   "goal": "standing directive injected on every prompt — specific and outcome-oriented",
   "provider": "claude",
@@ -154,24 +155,17 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
   const pendingHire = hireQueue.pending[0];
   const reviewProgress = hireQueueProgress(hireQueue);
 
-  const knownCharacter = (c?: string): OfficeCharacterName =>
-    (OFFICE_CAST.some(m => m.name === c) ? (c as OfficeCharacterName) : DEFAULT_CHARACTER);
+  const { roster, defaultCharacter } = useThemeCast();
+
+  const knownCharacter = (c?: string): CharacterName =>
+    (roster.some(m => m.name === c) ? (c as CharacterName) : (defaultCharacter as CharacterName));
   const knownAccent = (a?: string): AccentColorName =>
     (ACCENTS.includes(a as AccentColorName) ? (a as AccentColorName) : 'sky');
-  /** The cast member a typed name refers to, if any.
-   *
-   *  The character tiles already set the name (clicking Meredith names the agent
-   *  Meredith), but the coupling ran ONE WAY, so typing "Meredith" left the
-   *  avatar on whatever was selected, in practice the Jim default. Same missing
-   *  default as issue #191 from the other direction, where a manifest that omits
-   *  `character` always lands on Jim.
-   *
-   *  Returns null on no match, and the caller leaves the avatar alone, so a
-   *  deliberate pick is never overwritten by continuing to type. */
-  const characterForName = (n: string): OfficeCharacterName | null => {
+  /** The cast member a typed name refers to, if any. */
+  const characterForName = (n: string): CharacterName | null => {
     const q = n.trim().toLowerCase();
     if (!q) return null;
-    const hit = OFFICE_CAST.find(c => c.displayName.toLowerCase() === q || c.name === q);
+    const hit = roster.find(c => c.displayName.toLowerCase() === q || c.name === q);
     return hit ? hit.name : null;
   };
   /** The locally-built spawn command for a manifest: provider preset + model
@@ -188,8 +182,8 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
   const initialProvider = inferAgentProvider(config.defaultCommand);
   const initialModel = isClaudeProvider(initialProvider) ? config.defaultModel : undefined;
 
-  const [name, setName] = useState(pendingHire?.name ?? 'Jim');
-  const [character, setCharacter] = useState<OfficeCharacterName>(knownCharacter(pendingHire?.character));
+  const [name, setName] = useState(pendingHire?.name ?? 'Ben');
+  const [character, setCharacter] = useState<CharacterName>(knownCharacter(pendingHire?.character));
   const [accent, setAccent] = useState<AccentColorName>(knownAccent(pendingHire?.accent));
   const [cwd, setCwd] = useState<string>(config.registeredRepos[0] ?? '');
   // Local mirror of the registered projects so one added from here shows as a
@@ -685,7 +679,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
 
                     <Row label={tr('addAgent.character')}>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        {OFFICE_CAST.map(c => (
+                        {roster.map(c => (
                           <button
                             key={c.name}
                             onClick={() => { setCharacter(c.name); setName(c.displayName); }}

@@ -5,15 +5,15 @@ import type { HarnessConfig } from '@/store/config';
 import { DEFAULT_ORG_TRIGGER } from '@shared/triggers';
 import { OfficeFloor } from '@/scene/office/OfficeFloor';
 import { useHive } from '@/hooks/useHive';
-import { useResolvedGodName } from '@/hooks/useResolvedGodName';
-import { useGodNameSync } from '@/i18n/useGodNameSync';
+import { useResolvedOrchestratorName } from '@/hooks/useResolvedOrchestratorName';
+import { useOrchestratorNameSync } from '@/i18n/useOrchestratorNameSync';
 import { useDirectionSync } from '@/i18n/useDirection';
 import { useArabicTerminalSync } from '@/terminal/useArabicTerminalSync';
 import { MemoryPanel } from '@/components/MemoryPanel';
 import { AgentDetailPanel } from '@/components/AgentDetailPanel';
 import { AgentStrip } from '@/components/AgentStrip';
 import { AddAgentModal } from '@/components/AddAgentModal';
-import { MichaelBooting } from '@/components/MichaelBooting';
+import { OrchestratorBooting } from '@/components/OrchestratorBooting';
 import { OnboardingWizard } from '@/components/OnboardingWizard';
 import { HivePicker } from '@/components/HivePicker';
 import { QuitWarningModal, type ClosingTimeState } from '@/components/QuitWarningModal';
@@ -32,13 +32,14 @@ import { TaskDetailOverlay } from '@/components/TaskDetailOverlay';
 import { IdePanel } from '@/ide/IdePanel';
 import { useHoldOptionToTalk } from '@/freeflow/holdOption';
 import brandLogo from '@brand/logo.png?url';
+import { DEFAULT_THEME_ID } from '@shared/themePack';
 
 // Injected at build time from package.json (see electron.vite.config.ts).
 declare const __APP_VERSION__: string;
 
 export function App() {
-  // Point every {{godName}} string at the orchestrator's real, renameable name.
-  useGodNameSync();
+  // Point every {{orchestratorName}} string at the orchestrator's real, renameable name.
+  useOrchestratorNameSync();
   // Mirror the document only for a user who has picked an RTL app language.
   useDirectionSync();
   // Let terminals that are ALREADY open follow a language switch too.
@@ -46,11 +47,11 @@ export function App() {
   const agent = useStore(selectedAgent);
   const agents = useStore(s => s.agents);
   const agentCount = agents.length;
-  const bootingGodName = useResolvedGodName();
+  const bootingOrchestratorName = useResolvedOrchestratorName();
   const addAgentOpen = useStore(s => s.addAgentOpen);
   const setAddAgentOpen = useStore(s => s.setAddAgentOpen);
   const clearPendingHires = useStore(s => s.clearPendingHires);
-  const godStatus = useStore(s => s.godStatus);
+  const orchestratorStatus = useStore(s => s.orchestratorStatus);
   const fullscreenAgentId = useStore(s => s.fullscreenAgentId);
   const appThemeNow = useAppTheme();
   const sidebarWidth = useStore(s => s.sidebarWidth);
@@ -108,9 +109,8 @@ export function App() {
       // show the voice button disabled-with-tooltip when Free Flow is on but no
       // Groq key is set (Settings keeps this in sync on save).
       useStore.getState().setHasGroqKey(!!c.groqApiKey);
-      // Mirror the active office theme so OfficeFloor renders it (gated on the
-      // tvShowOffices flag; off = always the office). Settings keeps this synced.
-      useStore.getState().setOfficeTheme(c.tvShowOffices ? (c.officeTheme ?? 'office') : 'office');
+      // Mirror the active office theme so OfficeFloor renders it. Settings keeps this synced.
+      useStore.getState().setOfficeTheme(c.officeTheme ?? DEFAULT_THEME_ID);
       // Mirror the triggers so Settings → Connections and the Command Center's
       // Triggers tab read one list, not two copies that drift — whichever surface
       // saves calls these same setters and the other repaints. No extra IPC: main
@@ -123,7 +123,7 @@ export function App() {
       useStore.getState().setOrgTrigger(withTriggers.orgTrigger ?? DEFAULT_ORG_TRIGGER);
     });
     // Mirror BYOK OpenAI key presence (boolean only; the key never leaves main) so the
-    // Realtime Michael voice toggle can gate on it. Lives in the secret broker, not
+    // Realtime voice voice toggle can gate on it. Lives in the secret broker, not
     // config — so fetch it rather than derive from c.
     window.cth.realtimeHasOpenAiKey().then(has => {
       if (!cancelled) useStore.getState().setHasOpenAiKey(has);
@@ -187,9 +187,9 @@ export function App() {
     setClosing(null);
   };
 
-  // The hive: god-agent bootstrap, hook-driven avatars, idle-agent waking. Held
+  // The hive: orchestrator-agent bootstrap, hook-driven avatars, idle-agent waking. Held
   // off until the user opens a hive in the launch picker (passing null no-ops the
-  // hook) so Michael doesn't boot against the current home while the user may be
+  // hook) so the orchestrator doesn't boot against the current home while the user may be
   // about to switch to a different one.
   useHive(hiveOpened ? config : null);
 
@@ -204,7 +204,7 @@ export function App() {
   // hive (it would fire fake envelope handoffs and step seeded agents). Run it
   // only as an explicit showcase (VITE_CTH_DEMO=1 in dev) or on a genuinely
   // empty floor, and stop it the instant the first real PTY agent appears
-  // (Michael always spawns, so in normal operation it effectively never runs).
+  // (the orchestrator always spawns, so in normal operation it effectively never runs).
   useEffect(() => {
     if (!config?.onboardingComplete) return;
     const DEMO = import.meta.env.DEV && import.meta.env.VITE_CTH_DEMO === '1';
@@ -235,7 +235,7 @@ export function App() {
   //
   // Not a one-shot at store construction: at launch every restored agent still
   // carries the PREVIOUS session's PTY id, so the reconcile above prunes the lot
-  // and correctly drops focus mode to null before god has respawned. The
+  // and correctly drops focus mode to null before orchestrator has respawned. The
   // preference therefore has to be re-checked once agents with live terminals
   // actually exist. `restoreFocusMode` is a no-op unless the preference is on and
   // focus mode is currently off, so re-running it on every roster change is safe
@@ -274,7 +274,7 @@ export function App() {
       width: '100vw', height: '100vh',
       overflow: 'hidden'
     }}>
-      {/* rt-12: global fixed-overlay toast for voice-Michael completions ("Oscar
+      {/* rt-12: global fixed-overlay toast for the voice orchestrator completions ("Oscar
           finished X"). Self-positions bottom-right; renders null until one arrives. */}
       <CompletionToast />
       {/* v0.3.4: background-update toast ("restart to update"); renders null until
@@ -345,7 +345,7 @@ export function App() {
           {appThemeNow === 'dark' ? '☀' : '☾'}
         </button>
         {/* v0.3.4: the IDE button moved to agent level — every agent's header
-            (sidebar detail, god Command Center, fullscreen) carries it. */}
+            (sidebar detail, orchestrator Command Center, fullscreen) carries it. */}
         <button
           className="cth-titlebar-nodrag cth-settings-btn cth-tip"
           onClick={() => { setSettingsSection(undefined); setSettingsOpen(true); }}
@@ -372,7 +372,7 @@ export function App() {
             if (fullscreenAgentId) { useStore.getState().setFullscreen(null); return; }
             const all = useStore.getState().agents;
             const target = all.find((x) => x.id === useStore.getState().selectedId && x.ptyId)
-              ?? all.find((x) => x.isGod && x.ptyId)
+              ?? all.find((x) => x.isOrchestrator && x.ptyId)
               ?? all.find((x) => x.ptyId);
             if (target) useStore.getState().setFullscreen(target.id);
           }}
@@ -401,8 +401,8 @@ export function App() {
         <div style={{ flex: 1, minHeight: 0, minWidth: 0, position: 'relative' }}>
           <OfficeFloor />
           <MemoryPanel />
-          {agentCount === 0 && godStatus === 'booting' && <MichaelBooting />}
-          {agentCount === 0 && godStatus !== 'booting' && (
+          {agentCount === 0 && orchestratorStatus === 'booting' && <OrchestratorBooting />}
+          {agentCount === 0 && orchestratorStatus !== 'booting' && (
             <div style={{
               position: 'absolute', inset: 0,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -438,7 +438,7 @@ export function App() {
         }}>
           {agent ? (
             <AgentDetailPanel agent={agent} />
-          ) : godStatus === 'booting' ? (
+          ) : orchestratorStatus === 'booting' ? (
             <PixelPanel variant="default" noPadding style={{
               padding: 16, height: '100%',
               display: 'flex', flexDirection: 'column',
@@ -449,7 +449,7 @@ export function App() {
                 color: 'var(--cth-ink-500)'
               }}>WAKING THE FLOOR</div>
               <p style={{ margin: 0, fontSize: 13, textAlign: 'center', color: 'var(--cth-ink-700)' }}>
-                {bootingGodName} is clocking in.<br />
+                {bootingOrchestratorName} is clocking in.<br />
                 The terminal will land here once he's seated.
               </p>
             </PixelPanel>

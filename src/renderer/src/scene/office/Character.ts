@@ -40,13 +40,11 @@ const SPEED = 48; // pixels/sec (tileSize=16)
 // monitor and the torso rests on the chair. Down-facing agents (desk in front)
 // are pushed into the desk instead.
 const SIT_OFFSET = 5;
-const SIT_OFFSET_DOWN = 12;
+const SIT_OFFSET_DOWN = 6;
 const SIT_OFFSET_UP = 5;   // up-facing: drop the body down onto the chair
 const SIT_OFFSET_SIDE = 4; // left/right: a smaller drop plus the sideways tuck
-// Pixels cropped off the bottom of the 32px sprite while seated. Up/side seats
-// trim just the feet so most of the torso shows and fills the chair seat; the
-// down-facing crop is larger so the legs tuck under the desk in front.
-const SEAT_LEG_CROP = 8;
+// Pixels cropped off the bottom of the 32px sprite while seated.
+const SEAT_LEG_CROP = 3;
 const SEAT_BACK_CROP = 2;
 
 // Idle 30/30 loop: between tasks an agent alternates roaming the floor with
@@ -175,7 +173,7 @@ export class Character {
     this.sprite.setPosition(this.px, this.py);
 
     this.thoughtBubble = new ThoughtBubble();
-    // Keep the cloud inside the world — Michael's corner office would
+    // Keep the cloud inside the world — the orchestrator's corner office would
     // otherwise push his bubble off the top/left map edge.
     this.thoughtBubble.setBounds(
       this.mapRenderer.width * this.mapRenderer.tileSize,
@@ -426,7 +424,7 @@ export class Character {
     this.thoughtBubble.setZoom(z);
   }
 
-  /** Update the nameplate text (a rename mid-session, e.g. god's name). No-op
+  /** Update the nameplate text (a rename mid-session, e.g. orchestrator's name). No-op
    *  when unchanged — cheap to call on every store tick, and the plate is only
    *  repainted when the text it has to cover actually changed. */
   setName(displayName: string): void {
