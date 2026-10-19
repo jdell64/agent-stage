@@ -151,6 +151,26 @@ function buildDiskThemeCast(
     });
   };
 
+  const portraitCache = new Map<string, Promise<HTMLImageElement>>();
+
+  const getPortrait = (name: string): Promise<HTMLImageElement> => {
+    const cached = portraitCache.get(name);
+    if (cached) return cached;
+    const bytes = payload.files[`cast/portraits/${name}.png`];
+    if (!bytes) return Promise.reject(new Error(`no portrait for ${name}`));
+    const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: 'image/png' }));
+    urls.push(url);
+    const p = new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = (e) => reject(e);
+      img.src = url;
+    });
+    portraitCache.set(name, p);
+    return p;
+  };
+  const hasPortraits = Object.keys(payload.files).some((f) => f.startsWith('cast/portraits/') && f.endsWith('.png'));
+
   const defaultCharacter = payload.manifest.cast?.default && byName[payload.manifest.cast.default]
     ? payload.manifest.cast.default
     : roster[0].name;
@@ -158,6 +178,7 @@ function buildDiskThemeCast(
   return {
     byName,
     getFrames,
+    ...(hasPortraits ? { getPortrait } : {}),
     defaultCharacter,
   };
 }

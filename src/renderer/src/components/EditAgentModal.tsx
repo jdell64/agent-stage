@@ -285,7 +285,11 @@ export function EditAgentModal({ agent, onClose }: EditAgentModalProps) {
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
+            <div style={{
+              display: 'flex', gap: 8, justifyContent: 'flex-end', flexShrink: 0,
+              position: 'sticky', bottom: -16, zIndex: 2, background: 'var(--cth-cream-50)',
+              padding: '8px 0 16px', margin: '4px 0 -16px'
+            }}>
               <PixelButton variant="ghost" size="md" onClick={onClose}>cancel</PixelButton>
               <div style={{ flex: 1 }} />
               <PixelButton variant="primary" size="md" onClick={save}>save changes</PixelButton>

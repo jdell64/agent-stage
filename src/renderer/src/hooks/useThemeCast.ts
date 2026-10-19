@@ -39,8 +39,9 @@ export function useThemeCast(): CurrentCastInfo {
     return () => { cancelled = true; };
   }, [officeTheme]);
 
+  // byName may carry legacy-name aliases pointing at the same member; list each once.
   const roster: CastMember[] = cast?.byName
-    ? Object.values(cast.byName)
+    ? [...new Map(Object.values(cast.byName).map((m) => [m.name, m])).values()]
     : CAST;
 
   const defaultCharacter = cast?.defaultCharacter ?? DEFAULT_CHARACTER;
