@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { paintCastPortrait, type CharacterName } from '@/scene/office/cast';
+import { paintCastPortrait, CAST_BY_NAME, type CharacterName } from '@/scene/office/cast';
 import { PORTRAIT_W, PORTRAIT_H } from '@/scene/office/portraitArt';
 import { useStore } from '@/store/store';
 import { getTheme } from '@/scene/office/themeRegistry';
@@ -48,7 +48,21 @@ export function SpritePortrait({
         }
         if (cancelled) return;
 
-        if (theme?.cast?.getFrames && theme.cast.byName && theme.cast.byName[character]) {
+        // The built-in procedural cast also satisfies ThemeCast, but its frames are
+        // the 32px walking sprite (legs included), not the portrait. Only a pack that
+        // ships its own cast art should take this path.
+        if (theme?.cast?.getPortrait && theme.cast.byName?.[character]) {
+          try {
+            const bust = await theme.cast.getPortrait(character);
+            if (cancelled) return;
+            ctx.drawImage(bust, 0, 0, FRAME_W, FRAME_H, 0, 0, FRAME_W * scale, FRAME_H * scale);
+            return;
+          } catch {
+            // No bust for this member; fall through to the sprite crop.
+          }
+        }
+
+        if (theme?.cast?.getFrames && theme.cast.byName && theme.cast.byName !== CAST_BY_NAME && theme.cast.byName[character]) {
           const frames = await theme.cast.getFrames(character);
           if (cancelled) return;
           // Frame 0,0 is frontStand (Texture)

@@ -96,6 +96,8 @@ export interface PaletteConfig {
 export interface ThemeCast {
   byName: Record<string, CastMember>;
   getFrames: (name: string) => Promise<Texture[][]>;
+  /** Optional dedicated 18x28 bust (pack `cast/portraits/<name>.png`); absent → portraits crop the sprite. */
+  getPortrait?: (name: string) => Promise<HTMLImageElement | HTMLCanvasElement>;
   defaultCharacter: string;
 }
 
