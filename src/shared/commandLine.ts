@@ -61,19 +61,26 @@ export function applyModelToCommandLine(
   }
 
   const flag = preset.modelFlag;
+  const shortFlag = flag === '--model' ? '-m' : null;
   const cleaned: string[] = [];
   let replaced = false;
   for (let i = 0; i < rest.length; i++) {
     const tok = rest[i];
-    if (tok === flag) {
-      i += 1; // skip old model value
+    if (tok === flag || (shortFlag && tok === shortFlag)) {
+      const nextTok = rest[i + 1];
+      // Only consume the next token if it looks like a model value rather than
+      // another flag (so a trailing `--model` with no value or `--model -a never`
+      // doesn't swallow `-a`).
+      if (nextTok !== undefined && !nextTok.startsWith('-')) {
+        i += 1;
+      }
       if (model && !replaced) {
         cleaned.push(flag, model);
         replaced = true;
       }
       continue;
     }
-    if (tok.startsWith(`${flag}=`)) {
+    if (tok.startsWith(`${flag}=`) || (shortFlag && tok.startsWith(`${shortFlag}=`))) {
       if (model && !replaced) {
         cleaned.push(flag, model);
         replaced = true;
@@ -87,6 +94,75 @@ export function applyModelToCommandLine(
     cleaned.unshift(flag, model);
   }
   return formatCommandLine(bin, cleaned);
+}
+
+export interface ResolveSpawnCommandInput {
+  command: string;
+  args?: string[];
+  provider: AgentProvider;
+  explicitMetaCommand?: string;
+  savedCommand?: string;
+  autoMode: boolean;
+}
+
+export interface ResolvedSpawnCommand {
+  command: string;
+  args: string[];
+  persistedCommand: string;
+}
+
+/** Resolve the executable, user launch flags (`args`), and durable `persistedCommand`
+ *  for `spawnAgentCore` BEFORE per-spawn hive hook/prompt/resume args are injected:
+ *  - An explicit command (`args.length > 0` or `explicitMetaCommand` provided, including
+ *    an explicitly flagless command like `hive.command = "codex"` with `args = []`)
+ *    ALWAYS wins over a stale `savedCommand` in `registry.json` and never silently
+ *    escalates non-Claude flagless spawns with `autoMode` flags.
+ *  - A bare relaunch (`!explicit`: `args` empty and no `explicitMetaCommand`) reuses
+ *    `savedCommand` from `registry.json` when present for the same provider; only when
+ *    nothing was saved does it fall back to the pre-PR provider default (Claude gets
+ *    `argsWithAutoModeFlag` in the Claude block; non-Claude stays bare `[]`). */
+export function resolveSpawnCommandAndFlags(input: ResolveSpawnCommandInput): ResolvedSpawnCommand {
+  let command = input.command;
+  let args = [...(input.args ?? [])];
+
+  // 1) If a caller passed a full command string (`codex -a never -s danger-full-access`)
+  //    without pre-splitting `args`, split it here so every entry point behaves identically.
+  const cmdTokens = tokenizeCommand(command);
+  if (cmdTokens.length > 1 && args.length === 0) {
+    command = cmdTokens[0];
+    args = cmdTokens.slice(1);
+  } else if (cmdTokens.length === 1) {
+    command = cmdTokens[0];
+  }
+
+  const explicitMetaCmd = typeof input.explicitMetaCommand === 'string' ? input.explicitMetaCommand.trim() : '';
+  const savedCmd = typeof input.savedCommand === 'string' && input.savedCommand.trim()
+    ? input.savedCommand.trim()
+    : undefined;
+
+  if (args.length === 0 && explicitMetaCmd) {
+    const metaTokens = tokenizeCommand(explicitMetaCmd);
+    if (metaTokens.length > 0 && inferAgentProvider(explicitMetaCmd, input.provider) === input.provider) {
+      command = metaTokens[0];
+      args = metaTokens.slice(1);
+    }
+  }
+
+  const explicit = args.length > 0 || explicitMetaCmd.length > 0;
+  if (!explicit && savedCmd && inferAgentProvider(savedCmd, input.provider) === input.provider) {
+    const savedTokens = tokenizeCommand(savedCmd);
+    if (savedTokens.length > 0) {
+      command = savedTokens[0];
+      args = savedTokens.slice(1);
+    }
+  }
+
+  const persistedCommand = explicitMetaCmd
+    || formatCommandLine(command, args)
+    || savedCmd
+    || command;
+
+  return { command, args, persistedCommand };
 }
 
 /** Combine an argv list with session-resume arguments for the given provider.

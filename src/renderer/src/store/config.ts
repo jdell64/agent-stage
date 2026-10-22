@@ -342,7 +342,8 @@ export {
   quoteCommandToken,
   formatCommandLine,
   applyModelToCommandLine,
-  applyResumeToArgs
+  applyResumeToArgs,
+  resolveSpawnCommandAndFlags
 } from '@shared/commandLine';
 
 // ── REFRESH-MODELS: the models file, as main hands it over ─────────────────────────────

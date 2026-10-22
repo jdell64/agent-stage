@@ -68,7 +68,7 @@ import * as integrations from './integrations';
 import { validateBaseUrl, buildAuthHeaders, resolveUpstreamUrl, secretRefFor, INTEGRATION_TEMPLATES } from '../shared/integrations';
 import { RosterStore } from './roster';
 import { buildWorkerLaunch } from './workerLaunch';
-import { applyResumeToArgs, formatCommandLine, tokenizeCommand } from '../shared/commandLine';
+import { applyResumeToArgs, resolveSpawnCommandAndFlags, tokenizeCommand } from '../shared/commandLine';
 import { ControlRegistry } from './control';
 import { WorkerWakeWatchdog, WORKER_WAKE_REPORT_MS, activityEvidenceAt, type WorkerWakeFacts } from './workerWake';
 import { inboxNudgeText } from '../shared/hiveNudge';
@@ -2783,46 +2783,33 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   if (opts.hive) opts.hive = { ...opts.hive, provider };
   // Normalize command + user launch flags BEFORE hive provisioning mutates opts.args
   // with per-spawn hook/prompt injection.
-  // 1) If a caller passed a full command string (`codex -a never -s danger-full-access`)
-  //    without pre-splitting `opts.args`, split it here so every entry point behaves identically.
-  const cmdTokens = tokenizeCommand(opts.command);
-  if (cmdTokens.length > 1 && (!opts.args || opts.args.length === 0)) {
-    opts.command = cmdTokens[0];
-    opts.args = cmdTokens.slice(1);
-  } else if (cmdTokens.length === 1) {
-    opts.command = cmdTokens[0];
-  }
-  // 2) Resolve the user launch flags for this agent:
-  //    - Explicit args or `opts.hive.command` passed on this spawn win (and get persisted).
-  //    - Otherwise, reuse the previously persisted `command` from `registry.json` (if same provider).
-  //    - Only when nothing was passed AND nothing was persisted in `registry.json` do we
-  //      fall back to the provider's autoMode default flags.
+  // - An explicit command (`opts.args.length > 0` or `opts.hive.command`, including an
+  //   explicitly flagless command like `hive.command = "codex"`, `args = []`) always
+  //   wins over a stale `savedCmd` in `registry.json` and never silently escalates
+  //   non-Claude flagless spawns with `autoMode` flags.
+  // - Only a bare relaunch (`!explicit`) falls back to `savedCmd` from `registry.json`.
   if (opts.hive) {
-    const explicitMetaCmd = typeof opts.hive.command === 'string' ? opts.hive.command.trim() : '';
-    if ((!opts.args || opts.args.length === 0) && explicitMetaCmd) {
-      const metaTokens = tokenizeCommand(explicitMetaCmd);
-      if (metaTokens.length > 0 && inferAgentProvider(explicitMetaCmd, provider) === provider) {
-        opts.command = metaTokens[0];
-        opts.args = metaTokens.slice(1);
-      }
-    }
     const savedCmd = hive.enabled() ? hive.lastCommand(opts.hive.id) : undefined;
-    if (!opts.args || opts.args.length === 0) {
-      if (savedCmd && inferAgentProvider(savedCmd, provider) === provider) {
-        const savedTokens = tokenizeCommand(savedCmd);
-        if (savedTokens.length > 0) {
-          opts.command = savedTokens[0];
-          opts.args = savedTokens.slice(1);
-        }
-      } else {
-        opts.args = argsWithAutoModeFlag([], readConfig().autoMode, provider);
-      }
+    const resolved = resolveSpawnCommandAndFlags({
+      command: opts.command,
+      args: opts.args,
+      provider,
+      explicitMetaCommand: opts.hive.command,
+      savedCommand: savedCmd,
+      autoMode: !!readConfig().autoMode
+    });
+    opts.command = resolved.command;
+    opts.args = resolved.args;
+    if (resolved.persistedCommand) {
+      opts.hive = { ...opts.hive, command: resolved.persistedCommand };
     }
-    const persistedCommand = explicitMetaCmd
-      || formatCommandLine(opts.command, opts.args ?? [])
-      || savedCmd;
-    if (persistedCommand) {
-      opts.hive = { ...opts.hive, command: persistedCommand };
+  } else {
+    const cmdTokens = tokenizeCommand(opts.command);
+    if (cmdTokens.length > 1 && (!opts.args || opts.args.length === 0)) {
+      opts.command = cmdTokens[0];
+      opts.args = cmdTokens.slice(1);
+    } else if (cmdTokens.length === 1) {
+      opts.command = cmdTokens[0];
     }
   }
   // Activation-funnel entry (v0.4.6): every spawn REQUEST, so (attempted − spawned)

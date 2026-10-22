@@ -19,7 +19,8 @@ const {
   quoteCommandToken,
   formatCommandLine,
   applyModelToCommandLine,
-  applyResumeToArgs
+  applyResumeToArgs,
+  resolveSpawnCommandAndFlags
 } = loadTs('src/shared/commandLine.ts');
 const { argsWithAutoModeFlag, inferAgentProvider } = loadTs('src/shared/agentProvider.ts');
 const { buildWorkerLaunch } = loadTs('src/main/workerLaunch.ts');
@@ -85,6 +86,20 @@ test('custom flags survive a relaunch / model update across providers via applyM
   assert.equal(
     applyModelToCommandLine('agy --model "Gemini 3.1 Pro (High)" --dangerously-skip-permissions', 'Claude Opus 4.6 (Thinking)', 'antigravity'),
     'agy --model "Claude Opus 4.6 (Thinking)" --dangerously-skip-permissions'
+  );
+
+  // 3) Short `-m` alias and trailing `--model` with no value are handled cleanly without swallowing neighboring flags:
+  assert.equal(
+    applyModelToCommandLine('codex -m gpt-5.3-codex -a never -s danger-full-access', 'gpt-5.4', 'codex'),
+    'codex --model gpt-5.4 -a never -s danger-full-access'
+  );
+  assert.equal(
+    applyModelToCommandLine('codex -a never -s danger-full-access --model', 'gpt-5.4', 'codex'),
+    'codex -a never -s danger-full-access --model gpt-5.4'
+  );
+  assert.equal(
+    applyModelToCommandLine('codex --model -a never -s danger-full-access', 'gpt-5.4', 'codex'),
+    'codex --model gpt-5.4 -a never -s danger-full-access'
   );
 });
 
@@ -274,4 +289,71 @@ test('resume args combine cleanly with custom launch flags and hive injection ar
   } finally {
     cleanup();
   }
+});
+
+test('resolveSpawnCommandAndFlags: explicit flagless wins over saved flags, bare relaunch uses saved flags, and flagless first spawn matches pre-PR autoMode behavior', () => {
+  // 1) Explicit flagless command (`hive.command: "codex"`, `args: []`) vs saved-with-flags:
+  //    Explicit MUST win — stale saved `-s danger-full-access` must not silently override it,
+  //    and `persistedCommand` updates to `"codex"`.
+  const explicitFlagless = resolveSpawnCommandAndFlags({
+    command: 'codex',
+    args: [],
+    provider: 'codex',
+    explicitMetaCommand: 'codex',
+    savedCommand: 'codex -a never -s danger-full-access',
+    autoMode: true
+  });
+  assert.equal(explicitFlagless.command, 'codex');
+  assert.deepEqual(explicitFlagless.args, [], 'explicit flagless codex spawn keeps empty args (no stale saved flags or silent autoMode escalation)');
+  assert.equal(explicitFlagless.persistedCommand, 'codex');
+
+  // 2) Bare relaunch (`args: []`, no `explicitMetaCommand`) with a saved command in registry.json:
+  //    Saved command (`codex -a never -s danger-full-access`) wins!
+  const bareRelaunch = resolveSpawnCommandAndFlags({
+    command: 'codex',
+    args: [],
+    provider: 'codex',
+    explicitMetaCommand: undefined,
+    savedCommand: 'codex -a never -s danger-full-access',
+    autoMode: true
+  });
+  assert.equal(bareRelaunch.command, 'codex');
+  assert.deepEqual(bareRelaunch.args, ['-a', 'never', '-s', 'danger-full-access'], 'bare relaunch restores saved custom flags');
+  assert.equal(bareRelaunch.persistedCommand, 'codex -a never -s danger-full-access');
+
+  // 3) Flagless first spawn (nothing saved in registry.json) with autoMode ON matches pre-PR behavior per provider:
+  //    - Non-Claude providers (`codex`, `gemini`, `antigravity`) do NOT get silent autoMode flags in spawnAgentCore
+  //      when launched flagless (`args` stays `[]`).
+  //    - Claude gets `argsWithAutoModeFlag([], true, 'claude')` (`--permission-mode bypassPermissions`) in the Claude-only block.
+  for (const nonClaude of ['codex', 'gemini', 'antigravity']) {
+    const firstNonClaude = resolveSpawnCommandAndFlags({
+      command: nonClaude,
+      args: [],
+      provider: nonClaude,
+      explicitMetaCommand: nonClaude,
+      savedCommand: undefined,
+      autoMode: true
+    });
+    assert.deepEqual(firstNonClaude.args, [], `flagless ${nonClaude} spawn with autoMode on does not silently escalate in spawnAgentCore`);
+    const bareFirstNonClaude = resolveSpawnCommandAndFlags({
+      command: nonClaude,
+      args: [],
+      provider: nonClaude,
+      explicitMetaCommand: undefined,
+      savedCommand: undefined,
+      autoMode: true
+    });
+    assert.deepEqual(bareFirstNonClaude.args, [], `bare first ${nonClaude} spawn with nothing saved keeps pre-PR args=[]`);
+  }
+
+  const bareFirstClaude = resolveSpawnCommandAndFlags({
+    command: 'claude',
+    args: [],
+    provider: 'claude',
+    explicitMetaCommand: undefined,
+    savedCommand: undefined,
+    autoMode: true
+  });
+  const claudeEffectiveArgs = argsWithAutoModeFlag(bareFirstClaude.args, true, 'claude');
+  assert.deepEqual(claudeEffectiveArgs, ['--permission-mode', 'bypassPermissions'], 'Claude main-only spawn still receives bypassPermissions in the Claude block');
 });
