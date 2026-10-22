@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, powerSaveBlocker, screen, shell, Notification } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, nativeImage, ipcMain, Menu, powerMonitor, powerSaveBlocker, screen, shell, Notification } from 'electron';
 import { spawn, execFile } from 'node:child_process';
 import {
   rmSync, existsSync, readFileSync, readdirSync, statSync, cpSync, writeFileSync,
@@ -3271,13 +3271,15 @@ ipcMain.handle('session:resolveCwd', (_evt, sessionId: unknown) =>
   (typeof sessionId === 'string' ? resolveSessionCwd(sessionId) : null));
 
 // ─── IPC: clipboard ─────────────────────────────────────────────────────────
-ipcMain.handle('app:copyToClipboard', (_evt, text: unknown) => {
+// Electron 44 made the clipboard API asynchronous (readText/writeText return
+// Promises; readImage is gone), so every access here is awaited.
+ipcMain.handle('app:copyToClipboard', async (_evt, text: unknown) => {
   if (typeof text !== 'string') return { ok: false, error: 'invalid text' };
-  try { clipboard.writeText(text); return { ok: true }; }
+  try { await clipboard.writeText(text); return { ok: true }; }
   catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) }; }
 });
-ipcMain.handle('app:readClipboard', () => {
-  try { return clipboard.readText(); } catch { return ''; }
+ipcMain.handle('app:readClipboard', async () => {
+  try { return await clipboard.readText(); } catch { return ''; }
 });
 // Same read, SYNCHRONOUS, for the terminal's paste shortcut.
 //
@@ -3288,7 +3290,12 @@ ipcMain.handle('app:readClipboard', () => {
 // A `sendSync` read completes inside the keydown handler, before the tool gets
 // a chance to put the old contents back.
 ipcMain.on('app:readClipboardSync', (evt) => {
-  try { evt.returnValue = clipboard.readText(); } catch { evt.returnValue = ''; }
+  // Electron 44's readText() is async; the renderer stays blocked in sendSync
+  // until returnValue is assigned, and the read is still issued at keydown time.
+  Promise.resolve()
+    .then(() => clipboard.readText())
+    .then((t) => { evt.returnValue = typeof t === 'string' ? t : ''; })
+    .catch(() => { evt.returnValue = ''; });
 });
 // NOTE: the terminal theme is mirrored into each agent's per-session Claude
 // settings at spawn (hive.ensureAgent theme option) — deliberately NOT via
@@ -4013,13 +4020,25 @@ ipcMain.handle('dialog:attachFiles', async (evt) => {
 // clipboard holds no image (e.g. a normal text paste).
 ipcMain.handle('clipboard:saveImage', async () => {
   try {
-    const img = clipboard.readImage();
-    if (img.isEmpty()) return { ok: false as const, error: 'no image in clipboard' };
+    // Electron 44 removed the synchronous clipboard.readImage(); read the
+    // clipboard items and take the first image/* payload instead.
+    const items = await clipboard.read();
+    let png: Buffer | null = null;
+    for (const item of items) {
+      const type = item.types.find((t) => t.startsWith('image/'));
+      if (!type) continue;
+      const blob = (await item.getType(type)) as Blob;
+      const buf = Buffer.from(await blob.arrayBuffer());
+      if (type === 'image/png') { png = buf; break; }
+      const img = nativeImage.createFromBuffer(buf);
+      if (!img.isEmpty()) { png = img.toPNG(); break; }
+    }
+    if (!png || png.length === 0) return { ok: false as const, error: 'no image in clipboard' };
     const dir = join(app.getPath('temp'), 'cth-pastes');
     mkdirSync(dir, { recursive: true });
     const name = `paste-${Date.now()}.png`;
     const dest = join(dir, name);
-    writeFileSync(dest, img.toPNG());
+    writeFileSync(dest, png);
     return { ok: true as const, file: { path: dest, name } };
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : String(e) };
