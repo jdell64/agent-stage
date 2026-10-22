@@ -211,6 +211,7 @@
     "eraseEverything": "抹除一切并重启",
     "nav": {
       "general": "通用",
+      "theming": "主题",
       "prerequisites": "前置条件",
       "agentsModels": "智能体与模型",
       "autonomyBudgets": "自主权与预算",

@@ -55,7 +55,22 @@ export function SpritePortrait({
           try {
             const bust = await theme.cast.getPortrait(character);
             if (cancelled) return;
-            ctx.drawImage(bust, 0, 0, FRAME_W, FRAME_H, 0, 0, FRAME_W * scale, FRAME_H * scale);
+            const bw = (bust as HTMLImageElement).naturalWidth || bust.width;
+            const bh = (bust as HTMLImageElement).naturalHeight || bust.height;
+            const targetRatio = FRAME_W / FRAME_H;
+            const currentRatio = bw / bh;
+            let sw = bw;
+            let sh = bh;
+            let sx = 0;
+            let sy = 0;
+            if (currentRatio > targetRatio) {
+              sw = Math.round(bh * targetRatio);
+              sx = Math.round((bw - sw) / 2);
+            } else if (currentRatio < targetRatio) {
+              sh = Math.round(bw / targetRatio);
+              sy = 0;
+            }
+            ctx.drawImage(bust, sx, sy, sw, sh, 0, 0, FRAME_W * scale, FRAME_H * scale);
             return;
           } catch {
             // No bust for this member; fall through to the sprite crop.
