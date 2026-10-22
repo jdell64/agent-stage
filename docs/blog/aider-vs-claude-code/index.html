@@ -214,7 +214,7 @@ $ aider --help | grep -ci mcp
 <h2 id="is-aider-still-maintained" tabindex="-1">Is Aider still maintained? <a class="anchor" href="#is-aider-still-maintained" aria-hidden="true">#</a></h2>
 <p>Barely: the repo is not archived, but its last commit on main landed on 22 May 2026. PyPI’s latest version is 0.86.2, uploaded 12 Feb 2026, the first release since August 2025. On 15 Sep 2026, GitHub’s API showed no pull request merged since and 493 open, while 280 new issues had arrived since 1 Jun 2026. When a user asked <a href="https://github.com/Aider-AI/aider/issues/4613">where the maintainer had gone</a> in October 2025, Paul Gauthier replied: “Unfortunately I’ve been occupied with other projects recently.” Aider’s <a href="https://aider.chat/docs/leaderboards/">LLM leaderboard</a> still says last updated 20 Nov 2025. Claude Code published 29 versions to npm between 17 Aug and 12 Sep 2026.</p>
 <h2 id="which-models-can-aider-and-claude-code-use" tabindex="-1">Which models can Aider and Claude Code use? <a class="anchor" href="#which-models-can-aider-and-claude-code-use" aria-hidden="true">#</a></h2>
-<p>Aider can use almost any model, and Claude Code is built for Claude only. Aider connects through LiteLLM to hundreds of models, including local ones through Ollama or any OpenAI compatible server. Claude Code runs Claude through Anthropic, Amazon Bedrock, Claude Platform on AWS, Google Cloud’s Agent Platform or Microsoft Foundry, and Anthropic’s <a href="https://code.claude.com/docs/en/llm-gateway">gateway docs</a> say it “doesn’t support routing Claude Code to non-Claude models through any gateway.” People point it at Ollama anyway; our <a href="/blog/how-to-connect-ollama-to-claude-code/">Ollama and Claude Code guide</a> covers what breaks when you do.</p>
+<p>Aider can use almost any model, and Claude Code is built for Claude only. Aider connects through LiteLLM to hundreds of models, including local ones through Ollama or any OpenAI compatible server. A bad LiteLLM release reached PyPI on 21 Oct 2026; see <a href="/blog/litellm-1-107-0-compromise/">the LiteLLM 1.107.0 compromise</a> for who was exposed. Claude Code runs Claude through Anthropic, Amazon Bedrock, Claude Platform on AWS, Google Cloud’s Agent Platform or Microsoft Foundry, and Anthropic’s <a href="https://code.claude.com/docs/en/llm-gateway">gateway docs</a> say it “doesn’t support routing Claude Code to non-Claude models through any gateway.” People point it at Ollama anyway; our <a href="/blog/how-to-connect-ollama-to-claude-code/">Ollama and Claude Code guide</a> covers what breaks when you do.</p>
 <h2 id="is-aider-cheaper-than-claude-code" tabindex="-1">Is Aider cheaper than Claude Code? <a class="anchor" href="#is-aider-cheaper-than-claude-code" aria-hidden="true">#</a></h2>
 <p>Aider itself is free, and every request bills your model provider per token. Claude Code needs a paid Claude plan or an Anthropic API key billed per token. Claude’s <a href="https://claude.com/pricing">pricing page</a> on 15 Sep 2026 shows Claude Code missing from the Free plan, Pro at $20 billed monthly (or $17 a month billed annually) with Claude Code included, and Max from $100 a month for 5x or 20x Pro’s usage, all with usage limits. That subscription does not carry over to Aider. Anthropic’s <a href="https://code.claude.com/docs/en/legal-and-compliance">legal and compliance page</a> says subscription sign in is for “ordinary use of Claude Code and other native Anthropic applications”, so Aider on Claude means an API key or a cloud provider account, billed per token. Our <a href="/blog/how-much-does-claude-code-cost/">Claude Code cost breakdown</a> has the per token side.</p>
 <figure class="fig fig-inline"><img src="/blog/assets/media/aider-vs-claude-code/note-2.png" alt="Hand-drawn sketch from “Aider vs Claude Code in 2026: Which Should You Use?”" loading="lazy" decoding="async" /></figure>
@@ -291,50 +291,50 @@ $ aider --help | grep -ci mcp
       <h2>Related in Comparisons</h2>
       <div class="post-grid">
         <article class="card t-comparisons">
-  <a class="thumb t-comparisons" href="/blog/codex-vs-gemini-cli/" aria-hidden="true" tabindex="-1"><img src="/blog/assets/media/codex-vs-gemini-cli/hero.png" alt="" loading="lazy" decoding="async" /></a>
+  <a class="thumb t-comparisons" href="/blog/claude-duet-alternatives/" aria-hidden="true" tabindex="-1"><img src="/blog/assets/media/claude-duet-alternatives/hero.png" alt="" loading="lazy" decoding="async" /></a>
   <div class="body">
     <div class="meta">
-      <time datetime="2026-10-19">Oct 19, 2026</time>
+      <time datetime="2026-10-22">Oct 22, 2026</time>
       <span class="dot" aria-hidden="true"></span>
       <span>4 min</span>
     </div>
-    <h3><a href="/blog/codex-vs-gemini-cli/">Codex vs Gemini CLI: Which Terminal Agent Still Fits in Oct 2026?</a></h3>
-    <p class="dek">Codex vs Gemini CLI, checked 19 Oct 2026: who can still sign in to Gemini CLI after the move to Antigravity CLI, Codex paid plans from $8, and which to pick.</p>
+    <h3><a href="/blog/claude-duet-alternatives/">Claude Duet Alternatives: 4 AI Agents You Can Use Today, No Waitlist</a></h3>
+    <p class="dek">Claude Duet is waitlisted and US only. Four proactive agents you can run today, sorted by where they run: a vendor&#39;s cloud or hardware you control.</p>
     <div class="foot">
       <span class="tag kind">Comparisons</span>
-      <a class="more" href="/blog/codex-vs-gemini-cli/" aria-label="Read: Codex vs Gemini CLI: Which Terminal Agent Still Fits in Oct 2026?">Read →</a>
+      <a class="more" href="/blog/claude-duet-alternatives/" aria-label="Read: Claude Duet Alternatives: 4 AI Agents You Can Use Today, No Waitlist">Read →</a>
     </div>
   </div>
 </article>
 <article class="card t-comparisons">
-  <a class="thumb t-comparisons" href="/blog/hermes-agent-alternatives/" aria-hidden="true" tabindex="-1"><img src="/blog/assets/media/hermes-agent-alternatives/hero.png" alt="" loading="lazy" decoding="async" /></a>
+  <a class="thumb t-comparisons" href="/blog/claude-duet-for-developers/" aria-hidden="true" tabindex="-1"><img src="/blog/assets/media/claude-duet-for-developers/hero.png" alt="" loading="lazy" decoding="async" /></a>
   <div class="body">
     <div class="meta">
-      <time datetime="2026-10-19">Oct 19, 2026</time>
+      <time datetime="2026-10-22">Oct 22, 2026</time>
       <span class="dot" aria-hidden="true"></span>
-      <span>5 min</span>
+      <span>4 min</span>
     </div>
-    <h3><a href="/blog/hermes-agent-alternatives/">Hermes Agent Alternatives: 7 Picks for Chat, Code and Cloud</a></h3>
-    <p class="dek">Seven Hermes Agent alternatives sorted by job: OpenClaw, Munder Difflin, NanoClaw, ZeroClaw, nanobot, Goose and Claude. Licences and prices checked 19 Oct 2026.</p>
+    <h3><a href="/blog/claude-duet-for-developers/">Is Claude Duet Good for Developers? What It Does With Code and What It Doesn&#39;t</a></h3>
+    <p class="dek">Claude Duet can prototype and build web apps, but it is built for business apps, not your repo. What developers get from it, and where Claude Code fits better.</p>
     <div class="foot">
       <span class="tag kind">Comparisons</span>
-      <a class="more" href="/blog/hermes-agent-alternatives/" aria-label="Read: Hermes Agent Alternatives: 7 Picks for Chat, Code and Cloud">Read →</a>
+      <a class="more" href="/blog/claude-duet-for-developers/" aria-label="Read: Is Claude Duet Good for Developers? What It Does With Code and What It Doesn&#39;t">Read →</a>
     </div>
   </div>
 </article>
 <article class="card t-comparisons">
-  <a class="thumb t-comparisons" href="/blog/kilo-code-vs-cline/" aria-hidden="true" tabindex="-1"><img src="/blog/assets/media/kilo-code-vs-cline/hero.png" alt="" loading="lazy" decoding="async" /></a>
+  <a class="thumb t-comparisons" href="/blog/claude-duet-vs-munder-difflin/" aria-hidden="true" tabindex="-1"><img src="/blog/assets/media/claude-duet-vs-munder-difflin/hero.png" alt="" loading="lazy" decoding="async" /></a>
   <div class="body">
     <div class="meta">
-      <time datetime="2026-10-19">Oct 19, 2026</time>
+      <time datetime="2026-10-22">Oct 22, 2026</time>
       <span class="dot" aria-hidden="true"></span>
       <span>4 min</span>
     </div>
-    <h3><a href="/blog/kilo-code-vs-cline/">Kilo Code vs Cline: Two Open Source Coding Agents Compared</a></h3>
-    <p class="dek">Kilo Code vs Cline, checked 19 Oct 2026: licences, where each runs, how you pay for models, team prices and which one to pick.</p>
+    <h3><a href="/blog/claude-duet-vs-munder-difflin/">Claude Duet vs Munder Difflin: One Agent in the Cloud or a Team on Your Computer</a></h3>
+    <p class="dek">Claude Duet is one proactive agent in Anthropic&#39;s cloud. Munder Difflin gives you a free team of AI agents for all kinds of work. How they differ, side by side.</p>
     <div class="foot">
       <span class="tag kind">Comparisons</span>
-      <a class="more" href="/blog/kilo-code-vs-cline/" aria-label="Read: Kilo Code vs Cline: Two Open Source Coding Agents Compared">Read →</a>
+      <a class="more" href="/blog/claude-duet-vs-munder-difflin/" aria-label="Read: Claude Duet vs Munder Difflin: One Agent in the Cloud or a Team on Your Computer">Read →</a>
     </div>
   </div>
 </article>

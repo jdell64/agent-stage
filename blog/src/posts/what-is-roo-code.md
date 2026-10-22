@@ -43,7 +43,7 @@ The company's own pages point the same way. roocode.com now redirects to [roomot
 
 ## Where did Roo Code come from, and who forked it?
 
-Roo Code came from Cline; two of its forks are ZooCode and Kilo. Roo Code's README names [Cline](https://cline.bot/) as the project "from where Roo Code originated", and points to ZooCode as "a fork started by the Roo Code community". Kilo's guide gives the second: "We started Kilo as a Roo fork in 2025."
+Roo Code came from Cline; two of its forks are ZooCode and Kilo. Roo Code's README names [Cline](https://cline.bot/) as the project "from where Roo Code originated", and points to ZooCode as "a fork started by the Roo Code community". Kilo's guide gives the second: "We started Kilo as a Roo fork in 2025." For agents to pick instead of Cline or Roo Code, see [Cline alternatives](/blog/cline-alternatives/).
 
 <figure class="mg" data-scene="tree"><img src="/blog/assets/media/what-is-roo-code/tree.png" width="1600" height="1200" loading="lazy" decoding="async" alt="Animation. A family tree draws itself on a white page. A card labelled Cline appears at the top, a line grows down to a card labelled Roo Code, then the line branches to a card labelled ZooCode and a dashed card labelled Kilo Code."><figcaption>Cline to Roo Code to ZooCode, as Roo Code's own README tells it; the dashed Kilo Code branch is from Kilo's guide.</figcaption></figure>
 
@@ -79,7 +79,7 @@ Pick a successor, then carry your settings across by hand where the guides say s
 Roo Code's README points to ZooCode, covered above, and Cline. Here are five ways to go, Cline included, each with its own source:
 
 1. **Cline.** Its [README](https://github.com/cline/cline) says "The open source coding agent in your IDE, terminal, & desktop." Apache 2.0; latest extension release v4.1.25 (16 Oct 2026). See [Cline vs Munder Difflin](/blog/cline-vs-munder-difflin/).
-2. **Munder Difflin.** [Munder Difflin](https://harnessmd.com/download) is what we make, and it is not an editor extension. It is free and open source: a desktop app that runs a team of coding agents such as Claude Code, Codex and Gemini CLI on your own computer. Start with [how to install and use Munder Difflin](/blog/how-to-install-and-use-munder-difflin/).
+2. **Munder Difflin.** [Munder Difflin](https://harnessmd.com/download) is what we make, and it is not an editor extension. It is free and open source: a desktop app that runs a team of AI agents for all kinds of knowledge work, coding included, on your own computer. Start with [how to install and use Munder Difflin](/blog/how-to-install-and-use-munder-difflin/).
 3. **Kilo Code.** Kilo's [README](https://github.com/Kilo-Org/kilocode) offers VS Code, JetBrains and a CLI, MIT licensed, and its Roo migration guide maps `RooVeterinaryInc.roo-cline` to `kilocode.Kilo-Code`.
 4. **Claude Code.** Anthropic's [overview](https://code.claude.com/docs/en/overview) says it is "Available in your terminal, IDE, desktop app, and browser." Its [licence file](https://github.com/anthropics/claude-code/blob/main/LICENSE.md) says "All rights reserved". See [Claude Code alternatives](/blog/claude-code-alternatives/).
 5. **Codex.** OpenAI's [README](https://github.com/openai/codex) says Codex installs in your code editor, naming VS Code, Cursor and Windsurf. The CLI is Apache 2.0.

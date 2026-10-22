@@ -5090,5 +5090,139 @@
       "status": "ready"
     },
     "inline": {}
+  },
+  "cursor-vs-cline": {
+    "title": "Cursor vs Cline: A Paid Editor and an Open Source Agent Compared",
+    "category": "comparisons",
+    "hero": {
+      "file": "assets/media/cursor-vs-cline/hero.png",
+      "alt": "Title card on white. A Comparisons pill, the title Cursor vs Cline in large ink type over a yellow underline, the line A paid editor and an open source agent, a Checked 19 Oct 2026 tag, and a pinwheel with yellow, blue, lilac and mint blades on a stick.",
+      "prompt": "Title card: the hero scene in assets/media/cursor-vs-cline/motion.js, shot at 1600 by 900.",
+      "status": "ready"
+    },
+    "inline": {}
+  },
+  "cline-alternatives": {
+    "title": "Cline Alternatives: 6 Picks and 2 Names to Skip (Oct 2026)",
+    "category": "comparisons",
+    "hero": {
+      "file": "assets/media/cline-alternatives/hero.png",
+      "alt": "Title card on white. A pill reading 6 picks and 2 names to skip, the title Cline alternatives in large ink type over a yellow underline, a Checked 19 Oct 2026 line, and two dice: a big yellow die showing six and a small grey die showing two.",
+      "prompt": "Title card: the hero scene in assets/media/cline-alternatives/motion.js, shot at 1600 by 900.",
+      "status": "ready"
+    },
+    "inline": {}
+  },
+  "agent-tools-today-2026-10-21": {
+    "title": "Agent Tools Today, 21 Oct 2026: DeepInfer, Voxtral 3, Claude Code 2.1.305",
+    "category": "news",
+    "hero": {
+      "file": "assets/media/agent-tools-today/hero.png",
+      "alt": "Hand drawn sketch: a front page with five numbered lines, a clock, and a yellow character reading it out",
+      "prompt": "Series hero for the Agent Tools Today daily brief, drawn in code (media-src/topic-tiles.html?t=news). Reused by every brief.",
+      "status": "ready"
+    },
+    "inline": {},
+    "youtube": []
+  },
+  "litellm-1-107-0-compromise": {
+    "title": "LiteLLM 1.107.0 Compromise: What It Steals and How to Check Your Machine",
+    "category": "guides",
+    "hero": {
+      "file": "assets/media/litellm-1-107-0-compromise/hero.png",
+      "alt": "Title card on white. A pill reading Security, the title LiteLLM 1.107.0 in large ink type, the line What it steals and how to check, a Checked 21 Oct 2026 line, and a parcel box with a 1.107.0 tag whose yellow tape seal has split open.",
+      "prompt": "Title card: the hero scene in assets/media/litellm-1-107-0-compromise/motion.js, shot at 1600 by 900.",
+      "status": "ready"
+    },
+    "inline": {}
+  },
+  "what-is-claude-duet": {
+    "title": "What Is Claude Duet? Anthropic's Proactive Agent App, Explained",
+    "category": "concepts",
+    "hero": {
+      "file": "assets/media/what-is-claude-duet/hero.png",
+      "alt": "Title card on white. A pill reading Launch, the title Claude Duet in large ink type, the line Anthropic's proactive agent app, a Checked 22 Oct 2026 line, and a yellow sun rising behind a small fanned stack of white cards with a sky blue bell beside them.",
+      "prompt": "Title card: the hero scene in assets/media/what-is-claude-duet/motion.js, shot at 1600 by 900.",
+      "status": "ready"
+    },
+    "inline": {}
+  },
+  "agent-tools-today-2026-10-22": {
+    "title": "Agent Tools Today, 22 Oct 2026: Claude API 2026-10-21, LayerFS 1.0, PHP2Shell",
+    "category": "news",
+    "hero": {
+      "file": "assets/media/agent-tools-today/hero.png",
+      "alt": "Hand drawn sketch: a front page with five numbered lines, a clock, and a yellow character reading it out",
+      "prompt": "Series hero for the Agent Tools Today daily brief, drawn in code (media-src/topic-tiles.html?t=news). Reused by every brief.",
+      "status": "ready"
+    },
+    "inline": {},
+    "youtube": []
+  },
+  "claude-api-version-2026-10-21": {
+    "title": "Claude API Version 2026-10-21: What Breaks and How to Upgrade",
+    "category": "guides",
+    "hero": {
+      "file": "assets/media/claude-api-version-2026-10-21/hero.png",
+      "alt": "Title card on white. A pill reading API, the title Claude API 2026-10-21 in large ink type, the subtitle What breaks and how to upgrade, a Checked 22 Oct 2026 line, and a white envelope that a rubber stamp marks with the date 2026-10-21 in blue over a faded 2023-06-01 stamp.",
+      "prompt": "Title card: the hero scene in assets/media/claude-api-version-2026-10-21/motion.js, shot at 1600 by 900.",
+      "status": "ready"
+    },
+    "inline": {}
+  },
+  "claude-duet-alternatives": {
+    "title": "Claude Duet Alternatives: 4 AI Agents You Can Use Today, No Waitlist",
+    "category": "comparisons",
+    "hero": {
+      "file": "assets/media/claude-duet-alternatives/hero.png",
+      "alt": "Title card on white. A pill reading Alternatives, the title Claude Duet alternatives, the line Proactive agents with no waitlist and a Checked 22 Oct 2026 line. Beside them a queue of numbered tickets under a Waitlist sign, and four lanes that light up one by one, each tagged Open now.",
+      "prompt": "Title card: the hero scene in assets/media/claude-duet-alternatives/motion.js, shot at 1600 by 900.",
+      "status": "ready"
+    },
+    "inline": {}
+  },
+  "claude-duet-vs-munder-difflin": {
+    "title": "Claude Duet vs Munder Difflin: One Agent in the Cloud or a Team on Your Computer",
+    "category": "comparisons",
+    "hero": {
+      "file": "assets/media/claude-duet-vs-munder-difflin/hero.png",
+      "alt": "Title card on white. A pill reading Versus, the title Claude Duet vs Munder Difflin, the line One agent in the cloud, or a team on your computer and a Checked 22 Oct 2026 line. On the left a cloud holds one card; on the right four small terminal windows type, with a yellow vs chip between them.",
+      "prompt": "Title card: the hero scene in assets/media/claude-duet-vs-munder-difflin/motion.js, shot at 1600 by 900.",
+      "status": "ready"
+    },
+    "inline": {}
+  },
+  "build-your-own-claude-duet": {
+    "title": "Build Your Own Claude Duet: A Free Morning Brief Agent",
+    "category": "guides",
+    "hero": {
+      "file": "assets/media/build-your-own-claude-duet/hero.png",
+      "alt": "Title card on white. A pill reading Guide, the title Build your own Claude Duet, the line A free morning brief for your codebase and a Checked 22 Oct 2026 line. A yellow sun rises behind a terminal that prints Morning brief, Pull requests, Checks and Issues, beside a calendar tile reading 08:00.",
+      "prompt": "Title card: the hero scene in assets/media/build-your-own-claude-duet/motion.js, shot at 1600 by 900.",
+      "status": "ready"
+    },
+    "inline": {}
+  },
+  "claude-duet-for-developers": {
+    "title": "Is Claude Duet Good for Developers? What It Does With Code and What It Doesn't",
+    "category": "comparisons",
+    "hero": {
+      "file": "assets/media/claude-duet-for-developers/hero.png",
+      "alt": "Title card on white. A pill reading Developers, the title Is Claude Duet good for developers?, the line What it does with code, and what it doesn't and a Checked 22 Oct 2026 line. A balance scale holds an inbox tray on one pan and a code block on the other and settles level.",
+      "prompt": "Title card: the hero scene in assets/media/claude-duet-for-developers/motion.js, shot at 1600 by 900.",
+      "status": "ready"
+    },
+    "inline": {}
+  },
+  "claude-duet-waitlist": {
+    "title": "Claude Duet Waitlist: Who Gets In First, and What to Use Meanwhile",
+    "category": "guides",
+    "hero": {
+      "file": "assets/media/claude-duet-waitlist/hero.png",
+      "alt": "Title card on white. A pill reading Access, the title Claude Duet waitlist, the line Who gets in first, and what to use meanwhile and a Checked 22 Oct 2026 line. Envelopes move along a rail; one lifts out and opens to a card reading You're in.",
+      "prompt": "Title card: the hero scene in assets/media/claude-duet-waitlist/motion.js, shot at 1600 by 900.",
+      "status": "ready"
+    },
+    "inline": {}
   }
 }
