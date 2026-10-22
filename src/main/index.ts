@@ -4020,7 +4020,7 @@ ipcMain.handle('dialog:attachFiles', async (evt) => {
 // clipboard holds no image (e.g. a normal text paste).
 ipcMain.handle('clipboard:saveImage', async () => {
   try {
-    // Electron 44 removed the synchronous clipboard.readImage(); read the
+    // Electron 44 removed the synchronous readImage call; read the
     // clipboard items and take the first image/* payload instead.
     const items = await clipboard.read();
     let png: Buffer | null = null;
