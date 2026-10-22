@@ -68,6 +68,7 @@ import * as integrations from './integrations';
 import { validateBaseUrl, buildAuthHeaders, resolveUpstreamUrl, secretRefFor, INTEGRATION_TEMPLATES } from '../shared/integrations';
 import { RosterStore } from './roster';
 import { buildWorkerLaunch } from './workerLaunch';
+import { applyResumeToArgs, resolveSpawnCommandAndFlags, tokenizeCommand } from '../shared/commandLine';
 import { ControlRegistry } from './control';
 import { WorkerWakeWatchdog, WORKER_WAKE_REPORT_MS, activityEvidenceAt, type WorkerWakeFacts } from './workerWake';
 import { inboxNudgeText } from '../shared/hiveNudge';
@@ -2780,6 +2781,37 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   const claudeProvider = isClaudeProvider(provider);
   opts.provider = provider;
   if (opts.hive) opts.hive = { ...opts.hive, provider };
+  // Normalize command + user launch flags BEFORE hive provisioning mutates opts.args
+  // with per-spawn hook/prompt injection.
+  // - An explicit command (`opts.args.length > 0` or `opts.hive.command`, including an
+  //   explicitly flagless command like `hive.command = "codex"`, `args = []`) always
+  //   wins over a stale `savedCmd` in `registry.json` and never silently escalates
+  //   non-Claude flagless spawns with `autoMode` flags.
+  // - Only a bare relaunch (`!explicit`) falls back to `savedCmd` from `registry.json`.
+  if (opts.hive) {
+    const savedCmd = hive.enabled() ? hive.lastCommand(opts.hive.id) : undefined;
+    const resolved = resolveSpawnCommandAndFlags({
+      command: opts.command,
+      args: opts.args,
+      provider,
+      explicitMetaCommand: opts.hive.command,
+      savedCommand: savedCmd,
+      autoMode: !!readConfig().autoMode
+    });
+    opts.command = resolved.command;
+    opts.args = resolved.args;
+    if (resolved.persistedCommand) {
+      opts.hive = { ...opts.hive, command: resolved.persistedCommand };
+    }
+  } else {
+    const cmdTokens = tokenizeCommand(opts.command);
+    if (cmdTokens.length > 1 && (!opts.args || opts.args.length === 0)) {
+      opts.command = cmdTokens[0];
+      opts.args = cmdTokens.slice(1);
+    } else if (cmdTokens.length === 1) {
+      opts.command = cmdTokens[0];
+    }
+  }
   // Activation-funnel entry (v0.4.6): every spawn REQUEST, so (attempted − spawned)
   // measures the fallout the whole rebuild exists to see. Gated on !noAutoInstall so
   // the missing-CLI relaunch (the only re-entry, index.ts install-exit handler) does
@@ -3065,8 +3097,9 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     const typedSid = typeof opts.resumeSessionId === 'string' ? opts.resumeSessionId.trim() : '';
     const sid = typedSid || (opts.resume === true ? hive.lastSession(opts.hive.id) : undefined);
     if (sid && rf) {
-      const args = opts.args ?? [];
-      if (!args.includes(rf)) { args.push(rf, sid); opts.args = args; didResume = true; }
+      const applied = applyResumeToArgs(opts.args ?? [], provider, sid);
+      opts.args = applied.args;
+      didResume = applied.resumed;
     } else if (sid && rsub) {
       // Subcommand form (Codex): `codex resume [OPTIONS] [SESSION_ID]` — the
       // subcommand MUST be argv[0], the id trails the flags. Codex indexes
@@ -3082,13 +3115,9 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
         if (typedSid) resumeNotFound = true;
       } else {
         if (ownerHome !== myHome) opts.env = { ...(opts.env ?? {}), CODEX_HOME: ownerHome };
-        const args = opts.args ?? [];
-        // Positional order matters: `codex resume [OPTIONS] [SESSION_ID] [PROMPT]`.
-        // The hive identity prompt rides in `args` as a POSITIONAL (codex has no
-        // prompt flag), so the id must come BEFORE it — appending the id last made
-        // codex read the prompt as SESSION_ID ("No saved session found with ID
-        // You are \"Dev2\"…") and the id as the prompt.
-        if (args[0] !== rsub) { opts.args = [rsub, sid, ...args]; didResume = true; }
+        const applied = applyResumeToArgs(opts.args ?? [], provider, sid);
+        opts.args = applied.args;
+        didResume = applied.resumed;
         console.log('[resume] codex resume', sid, 'in', ownerHome);
       }
     }
@@ -3761,6 +3790,12 @@ ipcMain.handle('hive:patchAgentRole', (_evt, id: unknown, role: unknown) => {
   if (typeof role !== 'string') return { ok: false, error: 'invalid role' };
   if (!hive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
   return hive.patchAgentRole(id, role);
+});
+ipcMain.handle('hive:patchAgentCommand', (_evt, id: unknown, command: unknown) => {
+  if (typeof id !== 'string') return { ok: false, error: 'invalid id' };
+  if (typeof command !== 'string') return { ok: false, error: 'invalid command' };
+  if (!hive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
+  return hive.patchAgentCommand(id, command);
 });
 
 // ─── IPC: Settings hero payload (remote data, cached) ───────────────────────
@@ -4746,7 +4781,7 @@ registerRealtimeActionIpc({
           name: o.hive?.name ?? o.id,
           provider: o.provider ?? o.hive?.provider ?? 'claude',
           cwd: res.worktreePath ?? o.cwd,
-          command: o.command,
+          command: o.hive?.command ?? o.command,
           role: o.hive?.role,
           worktreePath: res.worktreePath
         });
@@ -4991,6 +5026,7 @@ async function processSpawnRequest(filePath: string): Promise<void> {
     id: workerId,
     name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : `Worker ${reqId.slice(0, 12)}`,
     provider: raw.provider,
+    command: launch.command,
     role: 'worker',
     cwd
   };

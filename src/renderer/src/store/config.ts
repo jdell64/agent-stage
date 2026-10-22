@@ -337,7 +337,14 @@ export function modelsForProviderAtVersion(
 // path splits command lines with the SAME rules as the renderer's spawn flows
 // (they used to carry byte-identical copies). Re-exported here so existing
 // importers keep their path.
-export { tokenizeCommand } from '@shared/commandLine';
+export {
+  tokenizeCommand,
+  quoteCommandToken,
+  formatCommandLine,
+  applyModelToCommandLine,
+  applyResumeToArgs,
+  resolveSpawnCommandAndFlags
+} from '@shared/commandLine';
 
 // ── REFRESH-MODELS: the models file, as main hands it over ─────────────────────────────
 // Loaded ONCE per window (a file read in main, never a lookup) and replaced when the Settings

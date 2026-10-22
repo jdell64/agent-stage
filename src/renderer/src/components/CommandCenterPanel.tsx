@@ -22,6 +22,7 @@ import { roleForHiveSpawn } from '@shared/agentRole';
 import { useStore, triggerHistoryVisible, type Agent } from '@/store/store';
 import { usePtyParser } from '@/hooks/usePtyParser';
 import {
+  applyModelToCommandLine,
   buildSpawnCommand,
   decodeProviderModel,
   encodeProviderModel,
@@ -433,6 +434,7 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
         throw new Error('Cannot resume a session through a different provider.');
       }
       let resumeSessionId: string | undefined;
+      const registry = await window.cth.hiveRegistry().catch(() => null);
       if (resume) {
         // A precondition miss is fatal for an explicit "continue", and merely
         // means "start fresh" for an opportunistic one (see resumeOptional).
@@ -441,8 +443,7 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
           resume = false;
           resumeSessionId = undefined;
         };
-        const registry = await window.cth.hiveRegistry();
-        resumeSessionId = registry.agents[a.id]?.sessionId;
+        resumeSessionId = registry?.agents?.[a.id]?.sessionId;
         if (!resumeSessionId) {
           giveUpOnResume('No recorded session ID; current process was left running.');
         } else if (provider === 'claude' && !(await window.cth.resolveSessionCwd(resumeSessionId))) {
@@ -474,13 +475,18 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
       if (!resume) {
         resetTerminal(a.ptyId);
       }
-      const command = buildSpawnCommand(cfg, model, provider);
+      // Reuse custom launch flags from the agent's persisted command (or hive
+      // registry fallback) before falling back to the provider default.
+      const savedCommand = (a.command ?? '').trim() || (registry?.agents?.[a.id]?.command ?? '').trim();
+      const command = applyModelToCommandLine(savedCommand, model, provider)
+        ?? buildSpawnCommand(cfg, model, provider);
       const [exe, ...args] = tokenizeCommand(command.trim());
       const hive = {
         id: a.id,
         name: a.name,
         cwd: a.cwd,
         provider,
+        command: command.trim(),
         isOrchestrator: a.isOrchestrator,
         isAssistant: a.isAssistant,
         role: roleForHiveSpawn(a)

@@ -11,6 +11,7 @@ import {
   type AgentProvider,
   type HarnessConfig,
   AGENT_PROVIDER_PRESETS,
+  applyModelToCommandLine,
   buildSpawnCommand,
   modelsForProvider,
   unknownModelSuffix,
@@ -79,9 +80,13 @@ export function EditAgentModal({ agent, onClose }: EditAgentModalProps) {
     const trimmedName = name.trim() || agent.name;
     const trimmedDescription = description.trim() || 'a fresh harness';
     const trimmedGoal = goal.trim();
-    const command = config
+    // Preserve custom launch flags (e.g. `codex -a never -s danger-full-access`)
+    // when the provider hasn't changed; only fall back to `buildSpawnCommand`
+    // when switching providers or when no prior command was persisted.
+    const preservedCommand = applyModelToCommandLine(agent.command, model, provider);
+    const command = preservedCommand ?? (config
       ? buildSpawnCommand(config, model, provider)
-      : agent.command;
+      : agent.command);
 
     updateAgent(agent.id, {
       name: trimmedName,
@@ -93,6 +98,9 @@ export function EditAgentModal({ agent, onClose }: EditAgentModalProps) {
       description: trimmedDescription,
       goal: trimmedGoal || undefined
     });
+    if (command?.trim()) {
+      void window.cth.hivePatchAgentCommand?.(agent.id, command.trim());
+    }
     onClose();
   };
 
