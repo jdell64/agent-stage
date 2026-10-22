@@ -10,7 +10,7 @@ import {
   inferAgentProvider,
   normalizeAgentProvider
 } from '../shared/agentProvider';
-import { tokenizeCommand } from '../shared/commandLine';
+import { formatCommandLine, tokenizeCommand } from '../shared/commandLine';
 
 export interface WorkerLaunch {
   /** The executable name alone — what the PTY layer resolves and spawns. */
@@ -73,5 +73,5 @@ export function buildWorkerLaunch(opts: {
   const model =
     typeof opts.requestModel === 'string' && opts.requestModel.trim() ? opts.requestModel.trim() : '';
   const args = [...flags, ...(model && !flags.includes('--model') ? ['--model', model] : [])];
-  return { bin, args, command };
+  return { bin, args, command: formatCommandLine(bin, args) || command };
 }

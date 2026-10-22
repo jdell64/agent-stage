@@ -419,6 +419,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
         id,
         name: name.trim(),
         provider,
+        command: command.trim(),
         cwd,
         role: description.trim() || undefined,
         // A hire manifest may carry validated capability tags (routing hints).

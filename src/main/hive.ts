@@ -32,6 +32,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import type { AgentUsageSample } from './usage';
 import { COMMAND_GROUPS } from '../shared/claudeCommands';
 import {
+  inferAgentProvider,
   isClaudeProvider,
   isHiveAwareProvider,
   canReceiveInbox,
@@ -152,6 +153,10 @@ export interface AgentMeta {
   name: string;
   /** Which CLI this agent runs on. Defaults to 'claude' when unset (legacy). */
   provider?: AgentProvider;
+  /** Full launch command line (executable + user flags, excluding per-spawn hive
+   *  injection/resume args), persisted so every relaunch/resume/restart path can
+   *  reuse custom launch flags before falling back to the provider default. */
+  command?: string;
   role?: string;
   capabilities?: string[];
   cwd: string;
@@ -808,7 +813,14 @@ export class HiveManager {
     const prev = reg.agents[meta.id];
     if (meta.cwd) meta = { ...meta, cwd: expandTilde(meta.cwd) };
     const role = preferredAgentRole(meta.role, prev?.role, !!meta.isOrchestrator);
-    meta = { ...meta, role };
+    const nextProvider = meta.provider ?? prev?.provider ?? 'claude';
+    const explicitCommand = typeof meta.command === 'string' && meta.command.trim() ? meta.command.trim() : undefined;
+    const priorCommand = typeof prev?.command === 'string' && prev.command.trim()
+      && (!prev.provider || prev.provider === nextProvider || inferAgentProvider(prev.command, nextProvider) === nextProvider)
+      ? prev.command.trim()
+      : undefined;
+    const command = explicitCommand ?? priorCommand;
+    meta = { ...meta, provider: nextProvider, role, ...(command ? { command } : {}) };
 
     const identity = join(dir, 'identity.md');
     writeFileSync(identity, this.identityText(meta), 'utf8'); // refresh on each spawn
@@ -837,7 +849,7 @@ export class HiveManager {
     // Store the EXPANDED cwd, never the raw `~/…` the user typed — the registry is
     // read by hooks, the roster and the worker watcher, none of which run a shell.
     const cwd = this.cwdValidity(meta.cwd);
-    reg.agents[meta.id] = {
+    const nextEntry: RegistryAgent = {
       ...prev,
       ...meta,
       capabilities: meta.capabilities ?? prev?.capabilities ?? [],
@@ -848,6 +860,8 @@ export class HiveManager {
       archived: false,
       lastSeen: Date.now()
     };
+    if (!command) delete nextEntry.command;
+    reg.agents[meta.id] = nextEntry;
     if (meta.isOrchestrator) reg.orchestratorId = meta.id;
     this.atomicWriteJson(join(root, 'registry.json'), reg);
 
@@ -1082,6 +1096,30 @@ export class HiveManager {
       writeFileSync(join(this.agentDir(id), 'identity.md'), this.identityText(agent), 'utf8');
       this.appendLog({ kind: 'role', agentId: id, role: next });
       this.commit(`hive: role ${id}`);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  /** Persist an updated launch command line (executable + user flags) onto the
+   *  agent's registry record without respawning, so edits in EditAgentModal or
+   *  model switches survive a later relaunch even if registry.json is consulted. */
+  patchAgentCommand(id: string, command: string): { ok: boolean; error?: string } {
+    const root = this.root();
+    if (!root) return { ok: false, error: 'hive disabled' };
+    const next = command.trim();
+    if (!next) return { ok: false, error: 'empty command' };
+    try {
+      const reg = this.registry();
+      const agent = reg.agents[id];
+      if (!agent) return { ok: false, error: 'unknown agent' };
+      if (agent.command === next) return { ok: true };
+      agent.command = next;
+      agent.lastSeen = Date.now();
+      this.atomicWriteJson(join(root, 'registry.json'), reg);
+      this.appendLog({ kind: 'command', agentId: id, command: next });
+      this.commit(`hive: command ${id}`);
       return { ok: true };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
@@ -1324,6 +1362,12 @@ export class HiveManager {
   /** The per-agent Claude model last reported by its status line. */
   lastModel(agentId: string): string | undefined {
     return this.registry().agents[agentId]?.model;
+  }
+
+  /** The last persisted launch command line (executable + user flags) for an agent. */
+  lastCommand(agentId: string): string | undefined {
+    const cmd = this.registry().agents[agentId]?.command;
+    return typeof cmd === 'string' && cmd.trim() ? cmd.trim() : undefined;
   }
 
   private retiredSessions = new Map<string, Set<string>>();

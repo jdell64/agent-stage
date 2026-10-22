@@ -83,6 +83,7 @@ export function useRestoreTeam(config?: HarnessConfig | null): RestoreTeamState 
     let alreadyLive = 0;
     const failures: string[] = [];
     try {
+      const reg = await window.cth.hiveRegistry().catch(() => null);
       // Restore every agent CONCURRENTLY. Each spawn is keyed by its own ptyId and
       // touches no cross-agent state in the renderer, and in the main process the
       // whole `pty:spawn` handler (hive registry read-modify-write included) runs
@@ -99,8 +100,10 @@ export function useRestoreTeam(config?: HarnessConfig | null): RestoreTeamState 
         // abort the others — an unhandled rejection here used to make the
         // entire restore a silent no-op after the first bad agent.
         try {
-          const provider = inferAgentProvider(a.command, a.provider);
-          const command = (a.command ?? '').trim() || (config ? buildSpawnCommand(config, a.model, provider) : '');
+          const regCmd = (reg?.agents?.[a.id]?.command ?? '').trim();
+          const savedCommand = (a.command ?? '').trim() || regCmd;
+          const provider = inferAgentProvider(savedCommand || a.command, a.provider ?? reg?.agents?.[a.id]?.provider);
+          const command = savedCommand || (config ? buildSpawnCommand(config, a.model, provider) : '');
           if (!command || !a.cwd) {
             // No spawn recipe (an old entry persisted before `command`, with no
             // config to rebuild one). Keep it restorable and SAY why rather than
@@ -147,12 +150,13 @@ export function useRestoreTeam(config?: HarnessConfig | null): RestoreTeamState 
             // agent id is preserved across restart, so its registry entry,
             // memory.md and inbox reattach by id. No-op without a recorded session.
             resume: true,
-            hive: { id: a.id, name: a.name, provider, cwd, role: roleForHiveSpawn(a) }
+            hive: { id: a.id, name: a.name, provider, command: command.trim(), cwd, role: roleForHiveSpawn(a) }
           });
           if (res.ok) {
             restored++;
             return {
                 ...a,
+                command: command.trim(),
                 provider,
                 ptyId,
                 archived: false,

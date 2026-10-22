@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useStore, type Agent, type QueuedMessage, type StationKind, type ToolKind } from '@/store/store';
 import {
+  applyModelToCommandLine,
   buildSpawnCommand,
   ASSISTANT_MODEL,
   inferAgentProvider,
@@ -418,7 +419,9 @@ export function useHive(config: HarnessConfig | null): void {
 
       const orchestratorProvider = config.orchestratorProvider ?? 'claude';
       const orchestratorModel = config.orchestratorModel;
-      const command = buildSpawnCommand(config, orchestratorModel, orchestratorProvider);
+      const savedOrchestratorCmd = reg?.agents?.[ORCHESTRATOR_ID]?.command;
+      const command = applyModelToCommandLine(savedOrchestratorCmd, orchestratorModel, orchestratorProvider)
+        ?? buildSpawnCommand(config, orchestratorModel, orchestratorProvider);
       const [exe, ...args] = tokenizeCommand(command.trim());
       const res = await window.cth.spawnPty({
         id: ORCHESTRATOR_PTY,
@@ -434,7 +437,7 @@ export function useHive(config: HarnessConfig | null): void {
         // fresh session. Without this the most important context on the floor —
         // the orchestrator's — was lost on every restart.
         resume: true,
-        hive: { id: ORCHESTRATOR_ID, name: orchestratorName, provider: orchestratorProvider, cwd: config.harnessHome!, isOrchestrator: true, role: 'orchestrator' }
+        hive: { id: ORCHESTRATOR_ID, name: orchestratorName, provider: orchestratorProvider, command: command.trim(), cwd: config.harnessHome!, isOrchestrator: true, role: 'orchestrator' }
       });
       if (cancelled) { orchestratorSpawning.current = false; return; }
       if (!res.ok) { orchestratorSpawning.current = false; useStore.getState().setOrchestratorStatus('failed'); return; }
@@ -1248,16 +1251,18 @@ export function useHive(config: HarnessConfig | null): void {
         // Soft-reset the pooled xterm in place (no-op if none): re-arm input and
         // clear the stale frame so the revived TUI paints clean — like the button.
         resetTerminal(deadId);
-        const provider = inferAgentProvider(a.command, a.provider);
+        const reg = await window.cth.hiveRegistry().catch(() => null);
+        const savedCommand = (a.command ?? '').trim() || (reg?.agents?.[a.id]?.command ?? '').trim();
+        const provider = inferAgentProvider(savedCommand || a.command, a.provider ?? reg?.agents?.[a.id]?.provider);
         // Prefer the agent's exact recorded command (same model/flags); fall back to
         // a rebuilt one only if it predates the persisted `command` field.
-        const command = (a.command ?? '').trim() || buildSpawnCommand(cfg, a.model, provider);
+        const command = savedCommand || buildSpawnCommand(cfg, a.model, provider);
         const [exe, ...args] = tokenizeCommand(command);
         const hive = a.isOrchestrator
-          ? { id: a.id, name: a.name, cwd, provider, isOrchestrator: true, role: roleForHiveSpawn(a) }
+          ? { id: a.id, name: a.name, cwd, provider, command: command.trim(), isOrchestrator: true, role: roleForHiveSpawn(a) }
           : a.isAssistant
-          ? { id: a.id, name: a.name, cwd, provider, isAssistant: true, role: roleForHiveSpawn(a) }
-          : { id: a.id, name: a.name, cwd, provider, role: roleForHiveSpawn(a) };
+          ? { id: a.id, name: a.name, cwd, provider, command: command.trim(), isAssistant: true, role: roleForHiveSpawn(a) }
+          : { id: a.id, name: a.name, cwd, provider, command: command.trim(), role: roleForHiveSpawn(a) };
         // Spawn at the terminal's real grid so the TUI's absolute cursor moves land
         // in the right cells (a size mismatch scatters the redraw).
         const entry = acquireTerminal(deadId);

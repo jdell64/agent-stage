@@ -54,6 +54,10 @@ export interface HiveAgentMeta {
   name: string;
   /** Which CLI this agent runs on (claude/codex/grok/antigravity/custom); defaults claude. */
   provider?: AgentProvider;
+  /** Full launch command line (executable + user flags, excluding per-spawn hive
+   *  injection/resume args), persisted so every relaunch/resume/restart path can
+   *  reuse custom launch flags before falling back to the provider default. */
+  command?: string;
   role?: string;
   capabilities?: string[];
   cwd: string;
@@ -758,6 +762,9 @@ const api = {
   /** Persist a hire/job role to hive registry.json + identity.md (no respawn). */
   hivePatchAgentRole: (id: string, role: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('hive:patchAgentRole', id, role),
+  /** Persist an updated launch command line to hive registry.json (no respawn). */
+  hivePatchAgentCommand: (id: string, command: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('hive:patchAgentCommand', id, command),
   /** Rename an agent's display name. Its id, hive directory, and PTY are unchanged. */
   hiveRenameAgent: (id: string, name: string): Promise<{ ok: boolean; name?: string; error?: string }> =>
     ipcRenderer.invoke('hive:renameAgent', id, name),
