@@ -23,7 +23,7 @@ import { inboxNudgeText } from '../../../shared/hiveNudge';
 import { resolveOrchestratorName, setThemeOrchestratorName } from '../../../shared/orchestratorIdentity';
 import { acquireTerminal, resetTerminal, isTerminalAutomationSafe } from '@/components/terminalPool';
 import { canDeliverToAgent, deliverWithAcknowledgement, checkPrecondition } from './queueDelivery';
-import { CAST, DEFAULT_CHARACTER, ORCHESTRATOR_CHARACTER } from '@/scene/office/cast';
+import { CAST, DEFAULT_CHARACTER, ORCHESTRATOR_CHARACTER, normalizeCharacter } from '@/scene/office/cast';
 
 const ORCHESTRATOR_ID = 'orchestrator';
 /** Accent palette for MAIN-spawned (voice-hired) agents — picked deterministically
@@ -405,6 +405,10 @@ export function useHive(config: HarnessConfig | null): void {
       // Synchronous guard (no await between check and set) → exactly one spawn.
       if (cancelled || orchestratorSpawning.current) return;
       orchestratorSpawning.current = true;
+      // Remember the restored entry's look before clearing it: the card is rebuilt
+      // below, and a portrait/accent the user picked (Edit Agent) must survive a
+      // floor restore instead of snapping back to the default orchestrator face.
+      const restoredLook = useStore.getState().agents.find((x) => x.id === ORCHESTRATOR_ID);
       useStore.getState().removeAgent(ORCHESTRATOR_ID); // clear any stale restored entry
 
       // A prior rename (Edit Agent panel → renameAgent() → hive.ts's renameAgent())
@@ -444,8 +448,8 @@ export function useHive(config: HarnessConfig | null): void {
       const orchestrator: Agent = {
         id: ORCHESTRATOR_ID,
         name: orchestratorName,
-        character: ORCHESTRATOR_CHARACTER,
-        accent: 'lemon',
+        character: restoredLook?.character ? normalizeCharacter(restoredLook.character) : ORCHESTRATOR_CHARACTER,
+        accent: restoredLook?.accent ?? 'lemon',
         description: 'Orchestrator — runs the floor, triages requests, escalates only critical calls to you',
         project: 'hive',
         tmuxTarget: '',
