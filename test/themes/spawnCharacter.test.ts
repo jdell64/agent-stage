@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pickSpawnCharacter } from '../../src/renderer/src/scene/office/spawnCharacter';
+import { pickSpawnCharacter, resolveFloorCharacter } from '../../src/renderer/src/scene/office/spawnCharacter';
 
 const office = ['michael', 'jim', 'pam', 'dwight', 'ryan'].map((n) => ({ name: n, displayName: n[0].toUpperCase() + n.slice(1) }));
 
@@ -26,5 +26,15 @@ describe('pickSpawnCharacter', () => {
   });
   it('uses the fallback only when there is no roster at all', () => {
     expect(pickSpawnCharacter({ id: 'w', roster: [], used: [], fallback: 'ben' })).toBe('ben');
+  });
+});
+
+describe('resolveFloorCharacter', () => {
+  const cast = { byName: Object.fromEntries(office.map((member) => [member.name, member])), defaultCharacter: 'michael' };
+  it('uses the selected character from the active theme cast', () => {
+    expect(resolveFloorCharacter('dwight', cast)).toBe('dwight');
+  });
+  it('uses the active theme default when the selected character is unavailable', () => {
+    expect(resolveFloorCharacter('troi', cast)).toBe('michael');
   });
 });

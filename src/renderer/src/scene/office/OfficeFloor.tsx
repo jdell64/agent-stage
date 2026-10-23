@@ -7,6 +7,7 @@ import { useStore, type Agent } from '@/store/store';
 import { TiledMapRenderer } from './TiledMapRenderer';
 import { Camera } from './Camera';
 import { Character, paintCup } from './Character';
+import { resolveFloorCharacter } from './spawnCharacter';
 import { DeskScreen } from './DeskScreen';
 import { MessageEnvelope, type MessageAct } from './MessageEnvelope';
 import { hexToNumber, DEFAULT_CHARACTER } from './cast';
@@ -61,6 +62,7 @@ interface Runtime {
   seatIndex: number | null;
   waitTile: Tile;
   charName: string;
+  characterRevision: number;
   prevStatus?: string;
   prevAction?: string;
   prevCarrying?: string;
@@ -1404,7 +1406,7 @@ export function OfficeFloor() {
       (app as any).__taskBoardPoll = taskBoardPoll;
 
       const addCharacter = async (agent: Agent) => {
-        const charName = theme.cast.byName[agent.character] ? agent.character : theme.cast.defaultCharacter;
+        const charName = resolveFloorCharacter(agent.character, theme.cast);
         const member = theme.cast.byName[charName];
         const seatIndex = claimSeat(agent);
         const seatInfo = seatIndex != null ? seatInfos[seatIndex] : undefined;
@@ -1431,7 +1433,7 @@ export function OfficeFloor() {
           onClick: (id) => useStore.getState().select(id),
         });
         character.show(charLayer);
-        const rt: Runtime = { character, seatIndex, waitTile, charName };
+        const rt: Runtime = { character, seatIndex, waitTile, charName, characterRevision: 0 };
         // Standard desks paint the 2×2 PC monitor two rows above the seat —
         // give those a DeskScreen (lights up while seated) and a cup spot
         // beside the monitor, exactly where the tileset's baked-in mug used
@@ -1609,6 +1611,15 @@ export function OfficeFloor() {
           const rt = runtimes.get(agent.id);
           if (!rt) void addCharacter(agent);
           else {
+            const charName = resolveFloorCharacter(agent.character, theme.cast);
+            if (rt.charName !== charName) {
+              rt.charName = charName;
+              const revision = ++rt.characterRevision;
+              void theme.cast.getFrames(charName).then((frames) => {
+                if (runtimes.get(agent.id) !== rt || rt.characterRevision !== revision) return;
+                rt.character.setFrames(frames);
+              }).catch((err) => console.warn(`[office] could not load ${charName} sprite for ${agent.id}:`, err));
+            }
             rt.character.setName(agent.name);
             applyState(agent, rt);
           }

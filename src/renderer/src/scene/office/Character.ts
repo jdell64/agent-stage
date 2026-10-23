@@ -141,6 +141,10 @@ export class Character {
   private glyphElapsed = 0;
   private onClick?: (agentId: string) => void;
 
+  setFrames(frames: Texture[][]): void {
+    this.sprite.setFrames(frames);
+  }
+
   // ── Office-life effects (cheer / coffee / watering) ────────────────────────
   /** Effect layer riding on the sprite: confetti, the carried cup, droplets. */
   private fx: Graphics;
