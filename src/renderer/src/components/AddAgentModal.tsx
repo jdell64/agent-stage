@@ -12,6 +12,7 @@ import { type AccentColorName } from '@/design/tokens';
 import type { HireManifest } from '@shared/hire';
 import { hireQueueProgress } from '@shared/hireQueue';
 import { MCP_CATALOG } from '@shared/mcpCatalog';
+import { newAgentId } from '@shared/agentId';
 import {
   OSS_LOCAL_PICKS,
   OSS_PROVIDER_PICKS,
@@ -131,10 +132,6 @@ const SECTIONS: { key: SectionKey; labelKey: string; hintKey: string }[] = [
 
 function basename(path: string): string {
   return path.split('/').filter(Boolean).pop() ?? path;
-}
-
-function uniqueId(name: string): string {
-  return `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now().toString(36)}`;
 }
 
 export interface AddAgentModalProps {
@@ -394,7 +391,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
     if (!command.trim()) { setError(tr('addAgent.errCommand')); setSection('engine'); return; }
 
     setBusy(true);
-    const id = uniqueId(name);
+    const id = newAgentId();
     const ptyId = `pty-${id}`;
     // Split the editable command field into argv-style pieces for node-pty.
     // Quote-aware so an agy model label like "Gemini 3.1 Pro (High)" — or any
