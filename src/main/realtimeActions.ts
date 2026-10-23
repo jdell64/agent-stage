@@ -38,6 +38,7 @@ import { ipcMain } from 'electron';
 import type { HiveMessage, HiveTask, Registry } from './hive';
 import type { ScheduledMission } from './config';
 import { inferAgentProvider } from '../shared/agentProvider';
+import { newAgentId } from '../shared/agentId';
 import { clearCommandForProvider } from '../shared/providerAutomation';
 import { resolveOrchestratorName } from '../shared/orchestratorIdentity';
 import { scanThemes } from './themes';
@@ -653,7 +654,7 @@ function proposeDestructive(deps: RealtimeActionDeps, verb: string, a: Record<st
       str(a.cwd) || orchestratorCwd || Object.values(reg.agents).find((m) => m.cwd)?.cwd || '';
     if (!cwd) return { ok: false, spoken: 'I need a working directory to hire into — none is configured.' };
     const command = str(a.command) || PROVIDER_COMMAND[provider] || 'claude';
-    const id = `${slug(name)}-${shortId()}`;
+    const id = newAgentId();
     const spec2: RealtimeSpawnSpec = { id, cwd, command, provider, hive: { id, name, provider, role: role || undefined, cwd } };
     pending = { verb, confirmWord: 'spawn', targetLabel: name, createdAt: Date.now(), commit: buildSpawn(deps, spec2, `${name} on ${provider}`) };
     return {
