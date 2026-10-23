@@ -211,6 +211,7 @@
     "eraseEverything": "امحُ كل شيء وأعِد التشغيل",
     "nav": {
       "general": "عام",
+      "theming": "السمات",
       "prerequisites": "المتطلّبات",
       "agentsModels": "الوكلاء والنماذج",
       "autonomyBudgets": "الاستقلالية والميزانيات",

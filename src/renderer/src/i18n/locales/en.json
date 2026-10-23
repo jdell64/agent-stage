@@ -211,6 +211,7 @@
     "eraseEverything": "erase everything & restart",
     "nav": {
       "general": "General",
+      "theming": "Theming",
       "prerequisites": "Prerequisites",
       "agentsModels": "Agents & Models",
       "autonomyBudgets": "Autonomy & Budgets",
