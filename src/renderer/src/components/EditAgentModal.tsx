@@ -30,12 +30,13 @@ export interface EditAgentModalProps {
 
 /**
  * Compact post-hire editor for Identity / Engine / Briefing. Mirrors the Add
- * Agent fields that matter after spawn; save only patches the durable roster
- * via updateAgent (engine changes apply on the next restart).
+ * Agent fields that matter after spawn; save persists the name through the hive
+ * and patches the remaining roster fields (engine changes apply on restart).
  */
 export function EditAgentModal({ agent, onClose }: EditAgentModalProps) {
   useModelCatalogVersion(); // REFRESH-MODELS: re-render when the models file is refreshed
   const updateAgent = useStore((s) => s.updateAgent);
+  const renameAgent = useStore((s) => s.renameAgent);
   const { roster } = useThemeCast();
   const [config, setConfig] = useState<HarnessConfig | null>(null);
 
@@ -49,6 +50,8 @@ export function EditAgentModal({ agent, onClose }: EditAgentModalProps) {
   const [launchCommand, setLaunchCommand] = useState(agent.command ?? '');
   const [description, setDescription] = useState(agent.description);
   const [goal, setGoal] = useState(agent.goal ?? '');
+  const [saveError, setSaveError] = useState<string>();
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     void window.cth.getConfig().then(setConfig).catch(() => setConfig(null));
@@ -79,8 +82,15 @@ export function EditAgentModal({ agent, onClose }: EditAgentModalProps) {
   const preset = providerPreset(provider);
   const requestCommandCenterTab = useStore((s) => s.requestCommandCenterTab);
 
-  const save = () => {
-    const trimmedName = name.trim() || agent.name;
+  const save = async () => {
+    if (saving) return;
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      setSaveError('Name is required');
+      return;
+    }
+    setSaving(true);
+    setSaveError(undefined);
     const trimmedDescription = description.trim() || 'a fresh harness';
     const trimmedGoal = goal.trim();
     // Preserve custom launch flags (e.g. `codex -a never -s danger-full-access`)
@@ -97,8 +107,16 @@ export function EditAgentModal({ agent, onClose }: EditAgentModalProps) {
         ? buildSpawnCommand(config, model, provider)
         : agent.command);
 
+    // Always ask the hive to confirm the name: the renderer can already show a
+    // name that was never saved to the registry by an older Edit Agent build.
+    const renameResult = await renameAgent(agent.id, trimmedName);
+    if (!renameResult.ok) {
+      setSaveError(renameResult.error ?? 'Could not rename agent');
+      setSaving(false);
+      return;
+    }
+
     updateAgent(agent.id, {
-      name: trimmedName,
       character,
       accent,
       provider,
@@ -145,7 +163,7 @@ export function EditAgentModal({ agent, onClose }: EditAgentModalProps) {
               <Row label="Name">
                 <input
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  onChange={(e) => { setName(e.target.value); setSaveError(undefined); }}
                   placeholder="Gus"
                   style={inputStyle}
                   autoFocus
@@ -330,9 +348,10 @@ export function EditAgentModal({ agent, onClose }: EditAgentModalProps) {
               position: 'sticky', bottom: -16, zIndex: 2, background: 'var(--cth-cream-50)',
               padding: '8px 0 16px', margin: '4px 0 -16px'
             }}>
-              <PixelButton variant="ghost" size="md" onClick={onClose}>cancel</PixelButton>
+              {saveError && <span role="alert" style={{ color: 'var(--cth-coral)', alignSelf: 'center' }}>{saveError}</span>}
+              <PixelButton variant="ghost" size="md" onClick={onClose} disabled={saving}>cancel</PixelButton>
               <div style={{ flex: 1 }} />
-              <PixelButton variant="primary" size="md" onClick={save}>save changes</PixelButton>
+              <PixelButton variant="primary" size="md" onClick={() => { void save(); }} disabled={saving}>save changes</PixelButton>
             </div>
           </div>
         </PixelPanel>

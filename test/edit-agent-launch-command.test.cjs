@@ -20,3 +20,13 @@ test('Edit Agent explains restart timing and links to the Command Center Floor t
   assert.match(source, /requestCommandCenterTab\('floor'\)/);
   assert.match(source, /Command Center → Floor restart/);
 });
+
+test('Edit Agent saves every name through the hive before updating the roster', () => {
+  const saveStart = source.indexOf('const save = async () =>');
+  const save = source.slice(saveStart, source.indexOf('\n  return (', saveStart));
+  assert.match(save, /const renameResult = await renameAgent\(agent\.id, trimmedName\)/);
+  assert.ok(save.indexOf('await renameAgent(') < save.indexOf('updateAgent(agent.id, {'));
+  assert.match(save, /if \(!renameResult\.ok\) \{[\s\S]*?setSaveError\([\s\S]*?return;/);
+  assert.doesNotMatch(save, /trimmedName\s*===\s*agent\.name/);
+  assert.doesNotMatch(save, /updateAgent\(agent\.id,\s*\{\s*name:/);
+});
