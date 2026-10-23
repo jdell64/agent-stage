@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { useStore, type Agent, type QueuedMessage, type StationKind, type ToolKind } from '@/store/store';
+import { useStore, takeDepartedLook, type Agent, type QueuedMessage, type StationKind, type ToolKind } from '@/store/store';
 import {
   applyModelToCommandLine,
   buildSpawnCommand,
@@ -408,7 +408,10 @@ export function useHive(config: HarnessConfig | null): void {
       // Remember the restored entry's look before clearing it: the card is rebuilt
       // below, and a portrait/accent the user picked (Edit Agent) must survive a
       // floor restore instead of snapping back to the default orchestrator face.
-      const restoredLook = useStore.getState().agents.find((x) => x.id === ORCHESTRATOR_ID);
+      // reconcileWithLivePtys (App boot) already dropped a dead-pty orchestrator from
+      // `agents`, so fall back to the look it stashed (T42: #8 only read `agents`).
+      const restoredLook = useStore.getState().agents.find((x) => x.id === ORCHESTRATOR_ID)
+        ?? takeDepartedLook(ORCHESTRATOR_ID);
       useStore.getState().removeAgent(ORCHESTRATOR_ID); // clear any stale restored entry
 
       // A prior rename (Edit Agent panel → renameAgent() → hive.ts's renameAgent())

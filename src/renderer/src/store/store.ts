@@ -449,6 +449,17 @@ function slimAgents(agents: Agent[]): PersistedAgent[] {
   });
 }
 
+/** Look (portrait + accent) of agents that `reconcileWithLivePtys` dropped because
+ *  their pty died with the previous session and that respawn on their own
+ *  (orchestrator, assistant). In memory only: the respawn happens seconds later
+ *  in the same renderer session and re-persists the card. */
+const departedLooks = new Map<string, { character: CharacterName; accent: AccentColorName }>();
+export function takeDepartedLook(id: string): { character: CharacterName; accent: AccentColorName } | undefined {
+  const look = departedLooks.get(id);
+  departedLooks.delete(id);
+  return look;
+}
+
 function persistAgents(agents: Agent[], selectedId: string | null): void {
   const slim = slimAgents(agents);
   try {
@@ -976,6 +987,12 @@ export const useStore = create<State>((set, get) => ({
         ...s.restorableAgents.filter((r) => !dead.some((d) => d.id === r.id)),
         ...dead
       ];
+      // The orchestrator/assistant are dropped here and persisted away BEFORE their
+      // boot respawn rebuilds the card, so remember the look the owner picked.
+      for (const a of s.agents) {
+        if (!(a.isOrchestrator || a.isAssistant) || agents.some((k) => k.id === a.id)) continue;
+        departedLooks.set(a.id, { character: a.character, accent: a.accent });
+      }
       const feeds: Record<string, string[]> = {};
       for (const a of agents) feeds[a.id] = s.feeds[a.id] ?? [];
       const selectedId = agents.some((a) => a.id === s.selectedId)
