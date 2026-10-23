@@ -199,6 +199,20 @@ canvas, img, svg { image-rendering: pixelated; image-rendering: crisp-edges; }
   font-feature-settings: "liga" 0, "clig" 0, "calt" 0 !important;
 }
 
+/* Editable text: no ligatures.
+ * JetBrains Mono (--cth-font-mono) ships `calt` ligatures for ".." and "...".
+ * While typing, Chromium repaints only the dirty rect around the caret, but the
+ * ligature substitution changes how the PREVIOUS glyphs look (".." -> "...").
+ * Those glyphs are not repainted, so "here..." showed as "here .." until a full
+ * re-render (leave the page and come back). The value was always intact; the
+ * stale paint was the bug. Editable controls never need ligatures. */
+input,
+textarea,
+[contenteditable] {
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "clig" 0, "calt" 0;
+}
+
 /* Arabic/RTL in terminals (see terminal/arabicJoiner.ts for the whole recipe).
    `plaintext` gives each ROW its own base direction from its first strong
    character — an Arabic row lays out right-to-left and right-aligned, a Latin
