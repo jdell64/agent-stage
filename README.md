@@ -92,6 +92,8 @@ this repository. `resources/themes/*` is gitignored except `plain`.
 
 Code and agent protocol always say *orchestrator*. The label people see resolves in this order:
 your own rename, then the active theme's `copy.orchestratorName`, then `Orchestrator`.
+Saving a name in **Edit Agent** updates the hive registry and roster. If an older build left a
+different name in the hive, opening Edit Agent and saving again synchronizes them.
 
 ## Usage endpoint
 
