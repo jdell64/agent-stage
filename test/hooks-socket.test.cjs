@@ -182,6 +182,36 @@ test('the beat never steals a socket another live server owns', posixOnly, async
   assert.equal(await roundTrip(sock), '{}');
 });
 
+test('a connected probe timeout does not detach our listener', async (t) => {
+  const { make, sock } = await floor(t);
+  const a = make();
+  await a.ensureListening();
+  // Windows always probes; clear the POSIX inode mark to exercise that path too.
+  a.mark = null;
+  a.probe = async () => 'unknown';
+  const h = await a.ensureListening();
+  assert.equal(h.listening, true, JSON.stringify(h));
+  assert.equal(h.orphans, 0);
+  assert.equal(await roundTrip(sock), '{}', 'the original listener still serves');
+});
+
+test('EADDRINUSE from our own orphan recovers by adoption or close and rebind', async (t) => {
+  const { make, sock } = await floor(t);
+  const a = make();
+  await a.ensureListening();
+  // Model a listener left in the orphan list by an earlier beat.
+  const orphan = a.server;
+  a.server = null;
+  a.mark = null;
+  a.bound = null;
+  a.orphans.push(orphan);
+
+  const h = await a.ensureListening();
+  assert.equal(h.listening, true, JSON.stringify(h));
+  assert.equal(h.orphans, 0);
+  assert.equal(await roundTrip(sock), '{}', 'the recovered listener serves');
+});
+
 test('a hive with no root yet is not silent, and binds once the root appears', async (t) => {
   const { home } = await floor(t);
   const logs = [];

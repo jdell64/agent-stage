@@ -91,9 +91,9 @@ const markOf = (p: string): FileMark | null => {
 const sameMark = (a: FileMark | null, b: FileMark | null): boolean =>
   !!a && !!b && a.dev === b.dev && a.ino === b.ino;
 
-/** Who answers at the path: nobody (missing, or a stale file from a crashed
- *  run), a stranger (another live instance — never touched), or us. */
-type PathOwner = 'nobody' | 'other' | 'self';
+/** Who answers at the path: nobody, another live instance, us, or an
+ *  inconclusive peer that connected but did not return a valid ownership pong. */
+type PathOwner = 'nobody' | 'other' | 'self' | 'unknown';
 
 export class HookServer {
   private server: Server | null = null;
@@ -200,6 +200,9 @@ export class HookServer {
       // Definitive check: does connecting to the path reach US?
       const owner = await this.probe(sock);
       if (owner === 'self') { this.mark = markOf(sock); return this.health(); }
+      // A connected peer without a valid ownership pong is inconclusive. Keep
+      // our listener in case the main thread was stalled while answering.
+      if (owner === 'unknown') return this.health();
       const code = owner === 'other' ? 'REPLACED' : 'ENOENT';
       this.detach(owner === 'other');
       console.error(`[hive] hook socket LOST (${code}): ${sock} no longer reaches our listener — every hook has been allowed meanwhile`);
@@ -210,7 +213,7 @@ export class HookServer {
     return this.health();
   }
 
-  private async bind(sock: string): Promise<void> {
+  private async bind(sock: string, retryAfterOrphans = false): Promise<void> {
     this.binding = true;
     try {
       this.bindAttempts += 1;
@@ -241,6 +244,32 @@ export class HookServer {
         this.mark = null;
         this.bound = null;
         try { server.close(); } catch { /* noop */ }
+        if (err === 'EADDRINUSE' && this.orphans.length > 0 && !retryAfterOrphans) {
+          if (process.platform === 'win32') {
+            await Promise.all(this.orphans.splice(0).map((orphan) => new Promise<void>((resolve) => {
+              try {
+                if (!orphan.listening) { resolve(); return; }
+                orphan.close(() => resolve());
+              } catch { resolve(); }
+            })));
+          } else if (await this.probe(sock) === 'self') {
+            const orphan = this.orphans.find((candidate) => candidate.listening);
+            if (orphan) {
+              this.orphans.splice(this.orphans.indexOf(orphan), 1);
+              this.server = orphan;
+              this.mark = markOf(sock);
+              this.bound = { path: sock, since: Date.now() };
+              this.lastError = null;
+              this.bindAttempts = 0;
+              this.alerted = false;
+              return;
+            }
+          }
+          // The stale handles are gone (or the path is no longer ours); retry
+          // exactly once after reclaiming them.
+          await this.bind(sock, true);
+          return;
+        }
         this.fail(sock, err, 'listen() failed');
         return;
       }
@@ -335,11 +364,12 @@ export class HookServer {
       c.on('end', () => {
         try {
           const r = JSON.parse(data) as { pong?: string; instance?: string };
-          finish(r.pong === nonce && r.instance === this.instanceId ? 'self' : 'other');
-        } catch { finish('other'); }
+          if (r.pong !== nonce || typeof r.instance !== 'string') { finish('unknown'); return; }
+          finish(r.instance === this.instanceId ? 'self' : 'other');
+        } catch { finish('unknown'); }
       });
-      c.on('error', () => finish(connected ? 'other' : 'nobody'));
-      setTimeout(() => finish(connected ? 'other' : 'nobody'), timeoutMs).unref();
+      c.on('error', () => finish(connected ? 'unknown' : 'nobody'));
+      setTimeout(() => finish(connected ? 'unknown' : 'nobody'), timeoutMs).unref();
     });
   }
 
@@ -355,7 +385,7 @@ export class HookServer {
     this.mark = null;
     this.bound = null;
     if (!s) return;
-    if (orphan) {
+    if (orphan && process.platform !== 'win32') {
       try { s.unref(); } catch { /* noop */ }
       this.orphans.push(s);
       return;
