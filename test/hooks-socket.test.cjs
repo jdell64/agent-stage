@@ -119,6 +119,13 @@ test('a failed bind is loud and retried, and toasts once the back-off is spent',
   assert.equal(toasts.length, 1, 'exactly one toast per outage');
   assert.match(toasts[0].title, /hooks are down/i);
   assert.match(toasts[0].body, /allowed/i);
+  const reportedFailures = logs.length;
+  const attemptsBeforeRetry = a.health().attempts;
+  const retry = await a.ensureListening();
+  assert.equal(retry.lastError, h.lastError, 'the persistent failure remains visible in health');
+  assert.equal(retry.attempts, attemptsBeforeRetry + 1, 'the beat continues checking for recovery');
+  assert.equal(logs.length, reportedFailures, 'an alerted outage does not flood log.jsonl');
+  assert.equal(toasts.length, 1, 'an ongoing outage does not repeat its toast');
 });
 
 test('stop() removes only the socket file it bound — never another instance\'s', posixOnly, async (t) => {

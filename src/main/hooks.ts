@@ -259,8 +259,15 @@ export class HookServer {
    *  a retry, and — once the back-off is spent — toast once per outage. */
   private fail(sock: string, code: string, detail: string): void {
     this.lastError = code;
-    console.error(`[hive] hook socket bind FAILED (${code}) at ${sock}: ${detail} — attempt ${this.bindAttempts}. Until this recovers every agent hook is ALLOWED and no cost is recorded.`);
-    this.hive.appendLog({ kind: 'hooks', state: 'bind-failed', path: sock, code, attempt: this.bindAttempts });
+    // The beat keeps checking after the retry back-off is spent so a live
+    // conflicting listener can still go away and let us recover. Once the
+    // outage alert has fired, those checks must not append an unbounded stream
+    // of identical errors to log.jsonl (one every beat for the lifetime of the
+    // conflict). health() continues to expose the current error and attempts.
+    if (!this.alerted) {
+      console.error(`[hive] hook socket bind FAILED (${code}) at ${sock}: ${detail} — attempt ${this.bindAttempts}. Until this recovers every agent hook is ALLOWED and no cost is recorded.`);
+      this.hive.appendLog({ kind: 'hooks', state: 'bind-failed', path: sock, code, attempt: this.bindAttempts });
+    }
     const i = Math.max(0, this.bindAttempts - 1);
     if (i < BIND_RETRY_MS.length) {
       if (this.retryTimer) clearTimeout(this.retryTimer);
