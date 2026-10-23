@@ -46,6 +46,7 @@ export function EditAgentModal({ agent, onClose }: EditAgentModalProps) {
     inferAgentProvider(agent.command, agent.provider)
   );
   const [model, setModel] = useState<string | undefined>(agent.model);
+  const [launchCommand, setLaunchCommand] = useState(agent.command ?? '');
   const [description, setDescription] = useState(agent.description);
   const [goal, setGoal] = useState(agent.goal ?? '');
 
@@ -60,6 +61,7 @@ export function EditAgentModal({ agent, onClose }: EditAgentModalProps) {
     setAccent(agent.accent);
     setProvider(inferAgentProvider(agent.command, agent.provider));
     setModel(agent.model);
+    setLaunchCommand(agent.command ?? '');
     setDescription(agent.description);
     setGoal(agent.goal ?? '');
   }, [agent.id]);
@@ -75,6 +77,7 @@ export function EditAgentModal({ agent, onClose }: EditAgentModalProps) {
   };
 
   const preset = providerPreset(provider);
+  const requestCommandCenterTab = useStore((s) => s.requestCommandCenterTab);
 
   const save = () => {
     const trimmedName = name.trim() || agent.name;
@@ -83,10 +86,16 @@ export function EditAgentModal({ agent, onClose }: EditAgentModalProps) {
     // Preserve custom launch flags (e.g. `codex -a never -s danger-full-access`)
     // when the provider hasn't changed; only fall back to `buildSpawnCommand`
     // when switching providers or when no prior command was persisted.
-    const preservedCommand = applyModelToCommandLine(agent.command, model, provider);
-    const command = preservedCommand ?? (config
-      ? buildSpawnCommand(config, model, provider)
-      : agent.command);
+    const editedCommand = launchCommand.trim();
+    // Apply model changes to the command currently shown in the editor so
+    // custom flags and hand edits survive an engine save.
+    const preservedCommand = applyModelToCommandLine(editedCommand, model, provider);
+    const sameProvider = inferAgentProvider(agent.command, agent.provider) === provider;
+    const command = preservedCommand ?? (sameProvider
+      ? (editedCommand || agent.command)
+      : config
+        ? buildSpawnCommand(config, model, provider)
+        : agent.command);
 
     updateAgent(agent.id, {
       name: trimmedName,
@@ -263,8 +272,31 @@ export function EditAgentModal({ agent, onClose }: EditAgentModalProps) {
                 </Row>
               )}
 
+              <Row label="Launch command">
+                <textarea
+                  value={launchCommand}
+                  onChange={(e) => setLaunchCommand(e.target.value)}
+                  placeholder="codex -a never -s workspace-write"
+                  rows={2}
+                  spellCheck={false}
+                  style={{ ...inputStyle, fontFamily: 'var(--cth-font-mono, monospace)', resize: 'vertical' }}
+                />
+              </Row>
+
               <span style={{ fontSize: 12, color: 'var(--cth-ink-500)', lineHeight: '16px' }}>
-                Engine changes are saved for the next restart. Use Command Center → Floor to restart a live session onto a new provider/model now.
+                Changes take effect only when the agent or harness restarts.{' '}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const orchestrator = useStore.getState().agents.find((a) => a.isOrchestrator);
+                    if (orchestrator) useStore.getState().select(orchestrator.id);
+                    requestCommandCenterTab('floor');
+                    onClose();
+                  }}
+                  style={{ border: 0, padding: 0, background: 'none', color: 'var(--cth-ink-700)', textDecoration: 'underline', cursor: 'pointer', font: 'inherit' }}
+                >
+                  Command Center → Floor restart
+                </button>
               </span>
             </Section>
 
