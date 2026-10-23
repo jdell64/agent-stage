@@ -2385,6 +2385,18 @@ if (process.defaultApp) {
 // single-instance lock and forward them to the running instance. (macOS gets
 // the 'open-url' event instead.) The lock also rules out two harnesses fighting
 // over the same hive, which was previously possible but never useful.
+// Windows groups taskbar buttons by AppUserModelID and takes the button's icon
+// from the window icon. Without an explicit id the dev build (electron.exe) shows
+// the generic Electron icon, so pin the id to the packaged appId
+// (electron-builder.yml) and give the window a multi-size .ico (a 1254px PNG is
+// not reliably converted to an HICON on Windows).
+const APP_USER_MODEL_ID = 'com.agentstage.app';
+if (process.platform === 'win32') app.setAppUserModelId(APP_USER_MODEL_ID);
+function appWindowIconPath(): string {
+  const file = process.platform === 'win32' ? 'agent-stage.ico' : 'agent-stage.png';
+  return app.isPackaged ? join(process.resourcesPath, file) : join(app.getAppPath(), 'build', file);
+}
+
 const gotInstanceLock = app.requestSingleInstanceLock();
 if (!gotInstanceLock) {
   allowQuit = true;
@@ -2450,7 +2462,7 @@ function createWindow(opts: { floor?: boolean } = {}): BrowserWindow {
   const geom = cascade ?? saved;
 
   const win = new BrowserWindow({
-    icon: join(app.isPackaged ? process.resourcesPath : app.getAppPath(), app.isPackaged ? 'agent-stage.png' : 'build/agent-stage.png'),
+    icon: appWindowIconPath(),
     width: geom?.width ?? DEFAULT_WIN.width,
     height: geom?.height ?? DEFAULT_WIN.height,
     ...(geom && geom.x !== undefined && geom.y !== undefined ? { x: geom.x, y: geom.y } : {}),
@@ -2535,6 +2547,12 @@ function createWindow(opts: { floor?: boolean } = {}): BrowserWindow {
   }
 
 
+  // Taskbar identity (Windows): tie the button to our AppUserModelID and .ico so
+  // it cannot fall back to electron.exe's generic icon.
+  if (process.platform === 'win32') {
+    try { win.setAppDetails({ appId: APP_USER_MODEL_ID, appIconPath: appWindowIconPath(), appIconIndex: 0 }); }
+    catch (e) { console.warn('[icon] setAppDetails failed', e); }
+  }
   win.once('ready-to-show', () => win.show());
 
   // Never opens a window; hands the URL to the OS browser instead.
