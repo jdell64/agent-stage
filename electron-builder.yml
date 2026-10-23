@@ -62,6 +62,8 @@ files:
 extraResources:
   - from: build/agent-stage.png
     to: agent-stage.png
+  - from: build/agent-stage.ico
+    to: agent-stage.ico
   - from: resources/md-slack-reply.cjs
     to: md-slack-reply.cjs
   # Knowledge Graph agent CLI + its pure-JS core. Agents invoke `node
