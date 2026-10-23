@@ -536,6 +536,15 @@ function teardownPty(id: string): void {
   syncKeepAwake();
 }
 
+/** Bulk shutdown disables PTY exit callbacks, so release their heavy-job holders explicitly. */
+function killAllPtys(): void {
+  const agentIds = [...new Set(ptyToAgent.values())];
+  try { ptyManager.killAll(); }
+  finally {
+    try { heavyLock.agentsGone(agentIds); } catch { /* best-effort during shutdown */ }
+  }
+}
+
 /** Send an inform to the orchestrator (the human's proxy). The ephemeral-worker
  *  controller uses this to surface every terminal failure AND to carry the Slack
  *  {channel,thread_ts} so orchestrator can post a 'couldn't complete' reply — closing the
@@ -3539,7 +3548,7 @@ ipcMain.handle('config:changeHome', async (_evt, payload: unknown) => {
   // (Identical recovery path to resetAll — relaunch is the clean re-bind.)
   allowQuit = true;
   writeConfig({ harnessHome: newHome });
-  try { ptyManager.killAll(); } catch (e) { console.error('[changeHome] killAll:', e); }
+  try { killAllPtys(); } catch (e) { console.error('[changeHome] killAll:', e); }
   app.relaunch();
   app.exit(0);
   return { ok: true as const }; // unreachable (process exits) — typed for the renderer
@@ -4101,7 +4110,7 @@ function teardownAndQuit(): void {
   try { reflector.stop(); } catch (e) { console.error('[quit] reflector.stop:', e); }
   try { persist.close(); } catch (e) { console.error('[quit] persist.close:', e); }
   try { hive.stopAllProxyBridges(); } catch (e) { console.error('[quit] stopAllProxyBridges:', e); }
-  try { ptyManager.killAll(); } catch (e) { console.error('[quit] killAll:', e); }
+  try { killAllPtys(); } catch (e) { console.error('[quit] killAll:', e); }
   app.quit();
 }
 ipcMain.handle('app:confirmClose', () => {
@@ -4160,7 +4169,7 @@ ipcMain.handle('app:resetAll', () => {
   try { memory.stop(); } catch (e) { console.error('[reset] memory.stop:', e); }
   try { reflector.stop(); } catch (e) { console.error('[reset] reflector.stop:', e); }
   try { persist.close(); } catch (e) { console.error('[reset] persist.close:', e); }
-  try { ptyManager.killAll(); } catch (e) { console.error('[reset] killAll:', e); }
+  try { killAllPtys(); } catch (e) { console.error('[reset] killAll:', e); }
   // The hive's kept-open log and ledger: an open file makes the rm below fail (ENOTEMPTY).
   try { hive.closeAppendFiles(); } catch (e) { console.error('[reset] hive.closeAppendFiles:', e); }
   try { hive.removeExposedCodexData(); } catch (e) { console.error('[reset] removeExposedCodexData:', e); }

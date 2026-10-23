@@ -174,7 +174,7 @@ export interface HeavyHolder {
   since: number;
   /** Last acquire or re-entry: the TTL runs from here. */
   touched: number;
-  /** Foreground heavy calls still running (their PostToolUse releases them). */
+  /** Heavy calls still running (PostToolUse or the process watcher releases them). */
   calls: Set<string>;
   /** A backgrounded job: released by its processes exiting (the watcher), the PTY, or the TTL. */
   background: boolean;
@@ -259,6 +259,11 @@ export class HeavyJobLock {
     if (this.holders.has(agentId)) this.release(agentId, 'pty-exit');
   }
 
+  /** All PTYs are being closed together during app shutdown/restart. */
+  agentsGone(agentIds: Iterable<string>): void {
+    for (const agentId of new Set(agentIds)) this.agentGone(agentId);
+  }
+
   private release(agentId: string, reason: 'posttool' | 'process-exit' | 'pty-exit' | 'ttl'): void {
     const h = this.holders.get(agentId);
     if (!h) return;
@@ -273,7 +278,7 @@ export class HeavyJobLock {
   }
 
   /** The watcher runs only while a slot is held: TTL expiry for everyone, and a process check
-   *  for background holders (a hidden listing every HEAVY_SCAN_MS). */
+   *  for calls that may not receive a PostToolUse (a hidden listing every HEAVY_SCAN_MS). */
   private arm(): void {
     if (this.timer || !this.holders.size) return;
     this.timer = this.setTimer(() => { this.timer = null; void this.scan().finally(() => this.arm()); }, HEAVY_SCAN_MS);
@@ -282,8 +287,8 @@ export class HeavyJobLock {
   /** One watcher tick (exported for tests). */
   async scan(): Promise<void> {
     this.expire();
-    const bg = [...this.holders.values()].filter((h) => h.background);
-    if (!bg.length || !this.d.probe || !this.d.roots) return;
+    const watched = [...this.holders.values()].filter((h) => h.background || h.calls.size > 0);
+    if (!watched.length || !this.d.probe || !this.d.roots) return;
     let procs: ProcRow[];
     try { procs = await this.d.probe(); } catch { return; }
     const parent = new Map(procs.map((p) => [p.pid, p.parentPid]));
@@ -295,10 +300,10 @@ export class HeavyJobLock {
     };
     const busy = new Set<string>();
     for (const p of procs) if (classifyCommand(p.commandLine).heavy) { const a = ownerOf(p.pid); if (a) busy.add(a); }
-    for (const h of bg) {
+    for (const h of watched) {
       if (busy.has(h.agentId)) { h.misses = 0; continue; }
       h.misses++;
-      if (h.misses >= HEAVY_SCAN_MISSES) { h.background = false; if (!h.calls.size) this.release(h.agentId, 'process-exit'); }
+      if (h.misses >= HEAVY_SCAN_MISSES) this.release(h.agentId, 'process-exit');
     }
   }
 
@@ -307,13 +312,16 @@ export class HeavyJobLock {
 
 /** The default process listing: one hidden, non-interactive PowerShell CIM query (Windows only). */
 export function probeProcesses(): Promise<ProcRow[]> {
-  if (process.platform !== 'win32') return Promise.resolve([]);
+  if (process.platform !== 'win32') return Promise.reject(new Error('Process probing is only supported on Windows'));
   const script = 'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress';
-  return new Promise((resolve) => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 10_000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
-    if (err || !stdout.trim()) return resolve([]);
+  return new Promise((resolve, reject) => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 10_000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
+    if (err) return reject(err);
+    if (!stdout.trim()) return reject(new Error('Process probe returned no process rows'));
     try {
       const rows = JSON.parse(stdout) as Array<{ ProcessId: number; ParentProcessId: number; CommandLine: string | null }>;
-      resolve((Array.isArray(rows) ? rows : [rows]).filter((r) => r && Number.isInteger(r.ProcessId)).map((r) => ({ pid: r.ProcessId, parentPid: r.ParentProcessId, commandLine: r.CommandLine ?? '' })));
-    } catch { resolve([]); }
+      const processes = (Array.isArray(rows) ? rows : [rows]).filter((r) => r && Number.isInteger(r.ProcessId)).map((r) => ({ pid: r.ProcessId, parentPid: r.ParentProcessId, commandLine: r.CommandLine ?? '' }));
+      if (!processes.length) return reject(new Error('Process probe returned no valid process rows'));
+      resolve(processes);
+    } catch (error) { reject(error); }
   }));
 }

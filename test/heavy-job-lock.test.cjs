@@ -141,14 +141,25 @@ test('BACKGROUND: its PostToolUse does NOT free the slot; the process check does
   assert.ok(probes >= HEAVY_SCAN_MISSES + 1);
 });
 
-test('the process check runs ONLY while a slot is held, and only probes when a holder is backgrounded', async () => {
+test('the process check runs ONLY while a slot is held and watches foreground calls too', async () => {
   let probes = 0;
-  const x = lock(1, { roots: () => [], probe: async () => { probes++; return []; } });
+  const x = lock(1, { roots: () => [{ agentId: 'a', pid: 10 }], probe: async () => { probes++; return []; } });
   assert.equal(x.timers.length, 0, 'nothing held: no timer');
   x.l.acquire('a', H, 'npm ci', '1', false);
   assert.equal(x.timers.length, 1, 'armed while held');
   await x.l.scan();
-  assert.equal(probes, 0, 'a foreground holder needs no process listing');
+  assert.equal(probes, 1, 'foreground holder gets a process listing if PostToolUse is missing');
+  assert.equal(x.l.snapshot().length, 1, 'one empty process scan is not enough to release');
+  await x.l.scan();
+  assert.equal(x.l.snapshot().length, 0, 'consecutive clean scans release a stale foreground call');
+  assert.equal(x.logs.at(-1).reason, 'process-exit');
+});
+
+test('a failed process probe does not count as evidence that the job exited', async () => {
+  const x = lock(1, { roots: () => [{ agentId: 'a', pid: 10 }], probe: async () => { throw new Error('denied'); } });
+  x.l.acquire('a', H, 'npm ci', '1', false);
+  await x.l.scan(); await x.l.scan();
+  assert.equal(x.l.snapshot().length, 1);
 });
 
 test('PTY EXIT and the TTL free a slot', () => {
@@ -157,6 +168,11 @@ test('PTY EXIT and the TTL free a slot', () => {
   x.l.agentGone('a');
   assert.equal(x.l.snapshot().length, 0);
   assert.equal(x.logs.at(-1).reason, 'pty-exit');
+  x.l.acquire('c', H, 'npm ci', '3', true);
+  x.l.acquire('d', H, 'npm ci', '4', true);
+  x.l.agentsGone(['c', 'd']);
+  assert.deepEqual(x.l.snapshot(), []);
+  assert.deepEqual(x.logs.filter((r) => r.action === 'release').slice(-2).map((r) => r.reason), ['pty-exit', 'pty-exit']);
   x.l.acquire('b', H, 'npm ci', '2', true);
   x.tick(HEAVY_TTL_MS);
   assert.equal(x.l.acquire('c', H, 'npm ci', '3', false).allow, true, 'b expired');
@@ -213,6 +229,8 @@ test('WIRING: index.ts builds the lock from the LIVE setting, hands it to the Ho
   assert.match(idx, /probe: probeProcesses,/);
   assert.match(idx, /hookServer\.setHeavyLock\(heavyLock\);/);
   assert.match(idx, /if \(!\[\.\.\.ptyToAgent\.values\(\)\]\.includes\(agentId\)\) \{ try \{ heavyLock\.agentGone\(agentId\); \}/);
+  assert.match(idx, /function killAllPtys\(\): void \{[\s\S]*heavyLock\.agentsGone\(agentIds\)/);
+  assert.equal((idx.match(/killAllPtys\(\);/g) ?? []).length, 3, 'every bulk PTY shutdown releases its holders');
   assert.match(idx, /heavyLock: \{ limit: heavyLimit\(readConfig\(\)\.heavyJobsAtOnce\), holders: heavyLock\.snapshot\(\) \}/);
 });
 
