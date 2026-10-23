@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { useStore, type Agent, type QueuedMessage, type StationKind, type ToolKind } from '@/store/store';
+import { useStore, takeDepartedLook, type Agent, type QueuedMessage, type StationKind, type ToolKind } from '@/store/store';
 import {
   applyModelToCommandLine,
   buildSpawnCommand,
@@ -23,6 +23,9 @@ import { inboxNudgeText } from '../../../shared/hiveNudge';
 import { resolveOrchestratorName, setThemeOrchestratorName } from '../../../shared/orchestratorIdentity';
 import { acquireTerminal, resetTerminal, isTerminalAutomationSafe } from '@/components/terminalPool';
 import { canDeliverToAgent, deliverWithAcknowledgement, checkPrecondition } from './queueDelivery';
+import { pickSpawnCharacter } from '@/scene/office/spawnCharacter';
+import { getTheme } from '@/scene/office/themeRegistry';
+import { loadTheme } from '@/scene/office/themeLoader';
 import { CAST, DEFAULT_CHARACTER, ORCHESTRATOR_CHARACTER, normalizeCharacter } from '@/scene/office/cast';
 
 const ORCHESTRATOR_ID = 'orchestrator';
@@ -408,7 +411,10 @@ export function useHive(config: HarnessConfig | null): void {
       // Remember the restored entry's look before clearing it: the card is rebuilt
       // below, and a portrait/accent the user picked (Edit Agent) must survive a
       // floor restore instead of snapping back to the default orchestrator face.
-      const restoredLook = useStore.getState().agents.find((x) => x.id === ORCHESTRATOR_ID);
+      // reconcileWithLivePtys (App boot) already dropped a dead-pty orchestrator from
+      // `agents`, so fall back to the look it stashed (T42: #8 only read `agents`).
+      const restoredLook = useStore.getState().agents.find((x) => x.id === ORCHESTRATOR_ID)
+        ?? takeDepartedLook(ORCHESTRATOR_ID);
       useStore.getState().removeAgent(ORCHESTRATOR_ID); // clear any stale restored entry
 
       // A prior rename (Edit Agent panel → renameAgent() → hive.ts's renameAgent())
@@ -1066,7 +1072,7 @@ export function useHive(config: HarnessConfig | null): void {
   //     be invisible on the floor. Main broadcasts; we build/archive the card here.
   useEffect(() => {
     if (!config?.onboardingComplete) return;
-    const offSpawn = window.cth.onHiveAgentSpawned?.((rec) => {
+    const offSpawn = window.cth.onHiveAgentSpawned?.(async (rec) => {
       if (!rec?.id) return;
       // addAgent is idempotent, but bail early if the renderer already carded it.
       if (useStore.getState().agents.some((a) => a.id === rec.id)) return;
@@ -1076,12 +1082,24 @@ export function useHive(config: HarnessConfig | null): void {
       // express: an agent named something else that should still look like a
       // particular character. Unknown values fall through to the inference rather
       // than breaking the card.
-      const castMember = (q?: string) =>
-        q ? CAST.find((m) => m.name === q || m.displayName.toLowerCase() === q)?.name : undefined;
-      const character =
-        castMember(rec.character?.trim().toLowerCase()) ??
-        castMember((rec.name || rec.id).toLowerCase()) ??
-        DEFAULT_CHARACTER;
+      // Resolve against the ACTIVE theme's cast: its portrait and floor sprite are
+      // looked up by name there, so a built-in name the theme lacks drew the
+      // procedural portrait plus the theme's default sprite (T42). Unnamed spawns
+      // take the first cast member nobody on the floor is using.
+      const officeTheme = useStore.getState().officeTheme;
+      const themeCast = getTheme(officeTheme)?.cast ?? (await loadTheme(officeTheme).catch(() => null))?.cast;
+      if (useStore.getState().agents.some((a) => a.id === rec.id)) return;
+      const themed = themeCast?.byName
+        ? [...new Map(Object.values(themeCast.byName).map((m) => [m.name, m])).values()]
+        : [];
+      const character = pickSpawnCharacter({
+        explicit: rec.character,
+        name: rec.name,
+        id: rec.id,
+        roster: themed.length ? themed : CAST,
+        used: useStore.getState().agents.map((a) => a.character),
+        fallback: DEFAULT_CHARACTER
+      });
       // Accent is otherwise hashed from the worker id, which is stable but not
       // choosable. An unrecognised accent keeps the hash.
       const askedAccent = SPAWN_ACCENTS.find((a) => a === rec.accent?.trim().toLowerCase());
@@ -1091,7 +1109,7 @@ export function useHive(config: HarnessConfig | null): void {
       const agent: Agent = {
         id: rec.id,
         name: rec.name || rec.id,
-        character,
+        character: character as Agent["character"],
         accent: askedAccent ?? SPAWN_ACCENTS[h],
         description: rec.role || 'a fresh harness',
         project,
