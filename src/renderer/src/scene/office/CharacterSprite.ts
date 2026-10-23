@@ -34,6 +34,7 @@ export class CharacterSprite {
   private frameW: number;
   private frameH: number;
   private cropMask: Graphics | null = null;
+  private cropPx = 0;
 
   constructor(frames: Texture[][]) {
     this.frames = frames;
@@ -60,6 +61,7 @@ export class CharacterSprite {
    * status glyphs / bubbles parented elsewhere are unaffected.
    */
   setSeatedCrop(cropPx: number): void {
+    this.cropPx = cropPx;
     if (cropPx <= 0) {
       if (this.cropMask) {
         this.sprite.mask = null;
@@ -98,6 +100,16 @@ export class CharacterSprite {
     this.sprite.scale.x = direction === 'left' ? -1 : 1;
     this.sprite.animationSpeed = anim === 'walk' ? 0.15 : anim === 'idle' ? 0.08 : 0.06;
     this.sprite.play();
+  }
+
+  setFrames(frames: Texture[][]): void {
+    this.frames = frames;
+    this.frameW = frames[0]?.[0]?.frame.width || this.frameW;
+    this.frameH = frames[0]?.[0]?.frame.height || this.frameH;
+    const frame = this.sprite.currentFrame;
+    this.sprite.textures = this.getFrames(this.currentDirection, this.currentAnim);
+    this.sprite.gotoAndPlay(frame % this.sprite.textures.length);
+    if (this.cropPx > 0) this.setSeatedCrop(this.cropPx);
   }
 
   setPosition(x: number, y: number): void {

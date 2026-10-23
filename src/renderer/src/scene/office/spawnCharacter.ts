@@ -9,6 +9,15 @@
  *  and only when the whole cast is taken a stable hash of the id. */
 export interface SpawnCastMember { name: string; displayName: string }
 
+/** Resolve a saved agent character against the active theme, matching the
+ * portrait's theme-cast lookup and the floor's default when it is unavailable. */
+export function resolveFloorCharacter(character: string, cast: {
+  byName: Record<string, unknown>;
+  defaultCharacter: string;
+}): string {
+  return cast.byName[character] ? character : cast.defaultCharacter;
+}
+
 export function pickSpawnCharacter(opts: {
   explicit?: string;
   name?: string;
