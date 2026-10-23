@@ -119,6 +119,13 @@ test('a failed bind is loud and retried, and toasts once the back-off is spent',
   assert.equal(toasts.length, 1, 'exactly one toast per outage');
   assert.match(toasts[0].title, /hooks are down/i);
   assert.match(toasts[0].body, /allowed/i);
+  const reportedFailures = logs.length;
+  const attemptsBeforeRetry = a.health().attempts;
+  const retry = await a.ensureListening();
+  assert.equal(retry.lastError, h.lastError, 'the persistent failure remains visible in health');
+  assert.equal(retry.attempts, attemptsBeforeRetry + 1, 'the beat continues checking for recovery');
+  assert.equal(logs.length, reportedFailures, 'an alerted outage does not flood log.jsonl');
+  assert.equal(toasts.length, 1, 'an ongoing outage does not repeat its toast');
 });
 
 test('stop() removes only the socket file it bound — never another instance\'s', posixOnly, async (t) => {
@@ -173,6 +180,36 @@ test('the beat never steals a socket another live server owns', posixOnly, async
   for (let i = 0; i < 20 && !(await a.ensureListening()).listening; i++) await sleep(50);
   assert.equal(a.health().listening, true);
   assert.equal(await roundTrip(sock), '{}');
+});
+
+test('a connected probe timeout does not detach our listener', async (t) => {
+  const { make, sock } = await floor(t);
+  const a = make();
+  await a.ensureListening();
+  // Windows always probes; clear the POSIX inode mark to exercise that path too.
+  a.mark = null;
+  a.probe = async () => 'unknown';
+  const h = await a.ensureListening();
+  assert.equal(h.listening, true, JSON.stringify(h));
+  assert.equal(h.orphans, 0);
+  assert.equal(await roundTrip(sock), '{}', 'the original listener still serves');
+});
+
+test('EADDRINUSE from our own orphan recovers by adoption or close and rebind', async (t) => {
+  const { make, sock } = await floor(t);
+  const a = make();
+  await a.ensureListening();
+  // Model a listener left in the orphan list by an earlier beat.
+  const orphan = a.server;
+  a.server = null;
+  a.mark = null;
+  a.bound = null;
+  a.orphans.push(orphan);
+
+  const h = await a.ensureListening();
+  assert.equal(h.listening, true, JSON.stringify(h));
+  assert.equal(h.orphans, 0);
+  assert.equal(await roundTrip(sock), '{}', 'the recovered listener serves');
 });
 
 test('a hive with no root yet is not silent, and binds once the root appears', async (t) => {
