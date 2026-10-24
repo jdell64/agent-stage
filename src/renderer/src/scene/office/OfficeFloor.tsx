@@ -13,7 +13,7 @@ import { MessageEnvelope, type MessageAct } from './MessageEnvelope';
 import { hexToNumber, DEFAULT_CHARACTER } from './cast';
 import { pickSoloLine, pickExchange, type BreakSpot } from './cafeteriaLines';
 import { colors } from '@/design/tokens';
-import { pickQuip, shouldShowWorkingQuip } from './themeQuips';
+import { FlavorBubbleBudget, pickQuip, resolveBubbleLifts, shouldShowWorkingQuip } from './themeQuips';
 import { loadTheme, resolveThemeMap, themeTilesetUrls, applyThemeChrome } from './themeLoader';
 import {
   installContextLossRecovery, planInitFailure, DEFAULT_MAX_INIT_RETRIES
@@ -460,17 +460,25 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
         useStore.getState().agents.find((a) => a.id === id);
 
       const previousQuips = new Map<string, string>();
+      const flavorBudget = new FlavorBubbleBudget();
       const showQuip = (
         id: string,
         rt: Runtime,
         status: 'working' | 'idle' | 'waiting' | 'blocked' | 'error' | 'done',
         genericLines: readonly string[],
         carrying?: string,
+        flavor = true,
       ): void => {
         const line = pickQuip(genericLines, theme.quips, status, rt.charName, previousQuips.get(id));
         if (!line) return;
+        if (flavor && !flavorBudget.tryClaim(id, Date.now())) return;
+        if (!flavor) flavorBudget.release(id);
         previousQuips.set(id, line);
         rt.character.showThought(line, carrying);
+      };
+
+      const showFlavorText = (id: string, rt: Runtime, line: string): void => {
+        if (flavorBudget.tryClaim(id, Date.now())) rt.character.showThought(line);
       };
 
       // ─── The coffee economy: sideboard → machine → desk → sink → sideboard ─
@@ -654,10 +662,10 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
         // the proximity director below).
         const p = rt.character.getPixelPosition();
         if (orchestratorDistance(p.x, p.y) > 96 && Math.random() < 0.35) {
-          showQuip(id, rt, 'idle', GOSSIP_KEYS.map((key) => t(key)));
+          showQuip(id, rt, 'idle', GOSSIP_KEYS.map((key) => t(key)), undefined, true);
           return;
         }
-        showQuip(id, rt, 'idle', [pickSoloLine(character, spot.spot, seed)]);
+        showQuip(id, rt, 'idle', [pickSoloLine(character, spot.spot, seed)], undefined, true);
       };
 
       // If the newcomer's table-mate is already lingering (and neither is mid-
@@ -786,8 +794,9 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
             b.chat.beat -= dt;
             if (b.chat.beat <= 0) {
               if (b.chat.idx < b.chat.lines.length) {
-                const speaker = (b.chat.idx % 2 === 0) ? rt : runtimes.get(b.chat.partnerId);
-                speaker?.character.showThought(b.chat.lines[b.chat.idx]);
+                const speakerId = (b.chat.idx % 2 === 0) ? id : b.chat.partnerId;
+                const speaker = runtimes.get(speakerId);
+                if (speaker) showFlavorText(speakerId, speaker, b.chat.lines[b.chat.idx]);
                 b.chat.idx++;
                 b.chat.beat = 2.4;                // seconds per line
                 b.timer = Math.max(b.timer, 3.5); // keep both around to finish
@@ -960,7 +969,7 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
           rt!.err.timer = 0;
           c.faceDirection(spot.facing);
           const lines = ERRAND_THOUGHTS[spot.kind];
-          showQuip(agent!.id, rt, 'idle', lines.map((key) => t(key)));
+          showQuip(agent!.id, rt, 'idle', lines.map((key) => t(key)), undefined, true);
           const finish = (): void => {
             const wasOrchestrator = !!agent!.isOrchestrator;
             releaseErrand(rt!);
@@ -1022,7 +1031,7 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
           lastSuckUp.set(id, now);
           const done = doneByAssignee.get(id) ?? 0;
           const pool = done > 0 ? SUCK_UP_KEYS : SUCK_UP_KEYS.slice(2);
-          showQuip(id, rt, 'idle', pool.map((key) => t(key, { done: String(done) })));
+          showQuip(id, rt, 'idle', pool.map((key) => t(key, { done: String(done) })), undefined, true);
           rt.character.hideThought(); // linger briefly, then fade
         }
       };
@@ -1561,7 +1570,7 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
             c.setStatusGlyph('none');
             c.sitAtDesk(true);
             if (agent.action?.trim()) c.showThought(liveActivity(agent), agent.carrying);
-            else if (shouldShowWorkingQuip(false)) showQuip(agent.id, rt, 'working', [liveActivity(agent)], agent.carrying);
+            else if (shouldShowWorkingQuip(false)) showQuip(agent.id, rt, 'working', [liveActivity(agent)], agent.carrying, true);
             else c.showThought(liveActivity(agent), agent.carrying);
             break;
           case 'thinking':
@@ -1602,7 +1611,7 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
             c.startWandering();
             if (finishedWork) {
               c.cheer();
-              showQuip(agent.id, rt, 'done', CHEER_KEYS.map((key) => t(key)));
+              showQuip(agent.id, rt, 'done', CHEER_KEYS.map((key) => t(key)), undefined, false);
             } else {
               c.hideThought();
             }
@@ -1616,14 +1625,14 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
           default:
             c.setStatusGlyph('none');
             // The orchestrator runs the floor from its desk; everyone else wanders when idle.
-            if (agent.isOrchestrator) { c.sitAtDesk(true); showQuip(agent.id, rt, 'idle', [liveActivity(agent, t('office.activity.runningFloor'))]); }
+            if (agent.isOrchestrator) { c.sitAtDesk(true); showQuip(agent.id, rt, 'idle', [liveActivity(agent, t('office.activity.runningFloor'))], undefined, true); }
             else if (finishedWork) {
               // Task done → a quick cheer on the spot, then back to roaming.
               c.startWandering();
               c.cheer();
-              showQuip(agent.id, rt, 'done', CHEER_KEYS.map((key) => t(key)));
+              showQuip(agent.id, rt, 'done', CHEER_KEYS.map((key) => t(key)), undefined, false);
             }
-            else { c.startWandering(); showQuip(agent.id, rt, 'idle', [liveActivity(agent, t('office.activity.idle'))]); }
+            else { c.startWandering(); showQuip(agent.id, rt, 'idle', [liveActivity(agent, t('office.activity.idle'))], undefined, true); }
             break;
         }
       };
@@ -1715,34 +1724,13 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
       // overlapping ones upward. Computed from each bubble's BASE rect (ignoring
       // the lift already applied) so the result is stable frame-to-frame.
       const resolveBubbleOverlaps = () => {
-        const items: Array<{ rt: Runtime; x: number; y: number; w: number; h: number }> = [];
-        for (const rt of runtimes.values()) {
+        const items: Array<{ id: string; rt: Runtime; x: number; y: number; w: number; h: number }> = [];
+        for (const [id, rt] of runtimes) {
           const lay = rt.character.getThoughtLayout();
-          if (lay) items.push({ rt, ...lay });
+          if (lay) items.push({ id, rt, ...lay });
         }
-        if (items.length < 2) {
-          for (const it of items) it.rt.character.setThoughtLift(0);
-          return;
-        }
-        // Lower bubbles (greater bottom edge) and left-most ones hold their spot;
-        // the rest get pushed above them. Deterministic ordering → no flicker.
-        items.sort((a, b) => (b.y + b.h) - (a.y + a.h) || a.x - b.x);
-        const placed: Array<{ x: number; y: number; w: number; h: number }> = [];
-        const pad = 2;
-        for (const it of items) {
-          let y = it.y;
-          let moved = true, guard = 0;
-          while (moved && guard++ < 12) {
-            moved = false;
-            for (const p of placed) {
-              const overlapX = it.x < p.x + p.w + pad && it.x + it.w + pad > p.x;
-              const overlapY = y < p.y + p.h + pad && y + it.h + pad > p.y;
-              if (overlapX && overlapY) { y = p.y - it.h - pad; moved = true; }
-            }
-          }
-          placed.push({ x: it.x, y, w: it.w, h: it.h });
-          it.rt.character.setThoughtLift(it.y - y);   // positive → shift up
-        }
+        const lifts = resolveBubbleLifts(items);
+        for (const it of items) it.rt.character.setThoughtLift(lifts.get(it.id) ?? 0);
       };
 
       const onTick = (ticker: Ticker) => {
