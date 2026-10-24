@@ -77,7 +77,7 @@ export interface AnchorConfig { calendar: Tile; boards: Tile; clock: Tile; }
 /** Optional tile-space action rectangle used by automatic camera fitting. */
 export interface CameraBounds { x: number; y: number; width: number; height: number; }
 
-export type ThemeQuipStatus = 'working' | 'idle' | 'error';
+export type ThemeQuipStatus = 'working' | 'idle' | 'waiting' | 'blocked' | 'error' | 'done';
 export interface ThemeQuips {
   byStatus?: Partial<Record<ThemeQuipStatus, string[]>>;
   byCharacter?: Record<string, string[]>;
@@ -526,9 +526,9 @@ export function validatePack(input: ValidateInput): ValidateResult {
       if (!isObj(raw.byStatus)) warn('bad-quips', 'quips.byStatus', 'byStatus must be an object; ignored');
       else {
         for (const key of Object.keys(raw.byStatus)) {
-          if (!['working', 'idle', 'error'].includes(key)) warn('bad-quips', `quips.byStatus.${key}`, 'unknown status key; ignored');
+          if (!['working', 'idle', 'waiting', 'blocked', 'error', 'done'].includes(key)) warn('bad-quips', `quips.byStatus.${key}`, 'unknown status key; ignored');
         }
-        for (const status of ['working', 'idle', 'error'] as const) {
+        for (const status of ['working', 'idle', 'waiting', 'blocked', 'error', 'done'] as const) {
           if (raw.byStatus[status] !== undefined) {
             const lines = cleanLines(raw.byStatus[status], `quips.byStatus.${status}`);
             if (lines) byStatus[status] = lines;

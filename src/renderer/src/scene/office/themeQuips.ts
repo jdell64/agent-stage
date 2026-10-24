@@ -1,5 +1,10 @@
 import type { ThemeQuips, ThemeQuipStatus } from '@shared/themePack';
 
+/** Keep real activity authoritative; theme banter is only occasional without a live action. */
+export function shouldShowWorkingQuip(hasFreshActivity: boolean, random: () => number = Math.random): boolean {
+  return !hasFreshActivity && random() < 0.2;
+}
+
 /** Pick from the existing generic pool plus the active theme's additions. */
 export function pickQuip(
   genericLines: readonly string[],

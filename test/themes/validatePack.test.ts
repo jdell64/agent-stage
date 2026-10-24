@@ -178,12 +178,12 @@ describe('validatePack: errors reject the pack whole', () => {
 describe('validatePack: warnings degrade one field', () => {
   it('accepts theme quips and drops invalid lines without rejecting the pack', () => {
     const r = validatePack(pack(baseManifest({ quips: {
-      byStatus: { working: [' Ship it. ', '', 'x'.repeat(181)], conversational: ['unknown'] },
+      byStatus: { working: [' Ship it. ', '', 'x'.repeat(181)], waiting: ['Please wait.'], blocked: ['Need help.'], done: ['Done!'], conversational: ['unknown'] },
       byCharacter: { Picard: ['Make it so.'], 'bad/name': ['ignored'] },
     } as any })));
     expect(r.pack).not.toBeNull();
     expect(r.pack!.manifest.quips).toEqual({
-      byStatus: { working: ['Ship it.'] },
+      byStatus: { working: ['Ship it.'], waiting: ['Please wait.'], blocked: ['Need help.'], done: ['Done!'] },
       byCharacter: { picard: ['Make it so.'] },
     });
     expect(codes(r, 'warn')).toContain('bad-quips');

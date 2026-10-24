@@ -13,7 +13,7 @@ import { MessageEnvelope, type MessageAct } from './MessageEnvelope';
 import { hexToNumber, DEFAULT_CHARACTER } from './cast';
 import { pickSoloLine, pickExchange, type BreakSpot } from './cafeteriaLines';
 import { colors } from '@/design/tokens';
-import { pickQuip } from './themeQuips';
+import { pickQuip, shouldShowWorkingQuip } from './themeQuips';
 import { loadTheme, resolveThemeMap, themeTilesetUrls, applyThemeChrome } from './themeLoader';
 import {
   installContextLossRecovery, planInitFailure, DEFAULT_MAX_INIT_RETRIES
@@ -457,7 +457,7 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
       const showQuip = (
         id: string,
         rt: Runtime,
-        status: 'working' | 'idle' | 'error',
+        status: 'working' | 'idle' | 'waiting' | 'blocked' | 'error' | 'done',
         genericLines: readonly string[],
         carrying?: string,
       ): void => {
@@ -1552,10 +1552,16 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
         // blocked → walk to the door and flash "!"; done/idle → wander.
         switch (agent.status) {
           case 'working':
+            c.setStatusGlyph('none');
+            c.sitAtDesk(true);
+            if (agent.action?.trim()) c.showThought(liveActivity(agent), agent.carrying);
+            else if (shouldShowWorkingQuip(false)) showQuip(agent.id, rt, 'working', [liveActivity(agent)], agent.carrying);
+            else c.showThought(liveActivity(agent), agent.carrying);
+            break;
           case 'thinking':
             c.setStatusGlyph('none');
             c.sitAtDesk(true);
-            showQuip(agent.id, rt, 'working', [liveActivity(agent)], agent.carrying);
+            c.showThought(liveActivity(agent), agent.carrying);
             break;
           case 'waiting':
             // Parked at the desk awaiting orchestrator / another agent — not actively
@@ -1563,11 +1569,11 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
             // agents that need the human).
             c.setStatusGlyph('none');
             c.sitAtDesk(false);
-            showQuip(agent.id, rt, 'idle', [liveActivity(agent, t('office.activity.waiting'))], agent.carrying);
+            c.showThought(liveActivity(agent, t('office.activity.waiting')), agent.carrying);
             break;
           case 'blocked':
             c.setStatusGlyph('blocked');
-            showQuip(agent.id, rt, 'error', [liveActivity(agent, t('office.activity.needsYou'))]);
+            c.showThought(liveActivity(agent, t('office.activity.needsYou')));
             c.walkToTile(rt.waitTile);
             break;
           case 'compacting':
@@ -1575,14 +1581,14 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
             // so an agent compacting context reads as busy rather than frozen.
             c.setStatusGlyph('compacting');
             c.sitAtDesk(true);
-            showQuip(agent.id, rt, 'working', [liveActivity(agent, t('office.activity.compacting'))]);
+            c.showThought(liveActivity(agent, t('office.activity.compacting')));
             break;
           case 'looping':
             // #5C — circuit-breaker armed (#6): hold position with the spinning
             // warning glyph so a runaway agent is visible on the floor.
             c.setStatusGlyph('looping');
             c.sitAtDesk(false);
-            showQuip(agent.id, rt, 'error', [liveActivity(agent, t('office.activity.looping'))]);
+            c.showThought(liveActivity(agent, t('office.activity.looping')));
             break;
           case 'success':
             c.setStatusGlyph('success');
@@ -1590,7 +1596,7 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
             c.startWandering();
             if (finishedWork) {
               c.cheer();
-              showQuip(agent.id, rt, 'idle', CHEER_KEYS.map((key) => t(key)));
+              showQuip(agent.id, rt, 'done', CHEER_KEYS.map((key) => t(key)));
             } else {
               c.hideThought();
             }
@@ -1609,7 +1615,7 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
               // Task done → a quick cheer on the spot, then back to roaming.
               c.startWandering();
               c.cheer();
-              showQuip(agent.id, rt, 'idle', CHEER_KEYS.map((key) => t(key)));
+              showQuip(agent.id, rt, 'done', CHEER_KEYS.map((key) => t(key)));
             }
             else { c.startWandering(); showQuip(agent.id, rt, 'idle', [liveActivity(agent, t('office.activity.idle'))]); }
             break;
