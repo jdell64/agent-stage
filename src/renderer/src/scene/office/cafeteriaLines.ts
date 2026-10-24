@@ -25,6 +25,8 @@ const COFFEE: readonly string[] = [
   'the coffee here is basically a hug',
   'who took my mug?',
   'brewing. do not disturb the machine.',
+  'this mug has seen things.',
+  'one sip closer to clarity.',
 ];
 
 const VENDING: readonly string[] = [
@@ -34,6 +36,8 @@ const VENDING: readonly string[] = [
   'shaking it. gently. respectfully.',
   'one (1) emotional-support snack',
   'A1 again. living dangerously.',
+  'snack acquired. crisis postponed.',
+  'the machine and I have terms.',
 ];
 
 const SNACK: readonly string[] = [
@@ -42,6 +46,8 @@ const SNACK: readonly string[] = [
   'these are everyone’s? cool cool cool',
   'second breakfast',
   'a snack is a unit test for morale',
+  'researching the snack landscape',
+  'this counts as a balanced break',
 ];
 
 const TABLE: readonly string[] = [
@@ -51,6 +57,8 @@ const TABLE: readonly string[] = [
   'pretending to read my notes',
   'I needed this break, honestly',
   'if anyone asks, I’m in a review',
+  'my calendar says this is focus time',
+  'taking notes on taking a break',
 ];
 
 const SPOT_POOL: Record<BreakSpot, readonly string[]> = {
@@ -126,6 +134,8 @@ const EXCHANGES: readonly Exchange[] = [
   ['it’s just a config change.', 'those are my favorite last words.'],
   ['the cat walked on my keyboard.', 'did it commit?', 'it force-pushed.', 'fire the cat.'],
   ['everything is a distributed system.', 'even the fridge?', 'especially the fridge.'],
+  ['did you save your work?', 'I saved a draft of a plan to save it.'],
+  ['the deadline moved up.', 'did it tell the calendar?'],
 ];
 
 // Keyed off the SPEAKER so, when the right character sits down first, they get

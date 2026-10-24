@@ -727,38 +727,52 @@
       "water": [
         "watering the plants 🌿",
         "giving the plants a drink",
-        "they grow so fast"
+        "they grow so fast",
+        "checking the soil like a pro",
+        "a little water goes a long way"
       ],
       "window": [
         "letting some air in 🍃",
         "a bit of fresh air",
-        "nice breeze today"
+        "nice breeze today",
+        "the room needed this",
+        "fresh air, fresh perspective"
       ],
       "dispenser": [
         "getting some water 💧",
         "hydration break",
-        "staying sharp"
+        "staying sharp",
+        "refill and reset",
+        "water: the original productivity tool"
       ],
       "fridge": [
         "anything good in the fridge?",
         "who took my yogurt?",
-        "just looking…"
+        "just looking…",
+        "label your leftovers, people",
+        "the mystery container is still here"
       ],
       "shelf": [
         "checking out the shelf 📚",
         "anything new in here?",
-        "so much good stuff"
+        "so much good stuff",
+        "a quick browse never hurt",
+        "found exactly what I expected"
       ],
       "bin": [
         "out with the scrap paper 🗑️",
         "desk cleanup day",
-        "tidying up a little"
+        "tidying up a little",
+        "making room for new notes",
+        "goodbye, obsolete sticky note"
       ],
       "smoke": [
         "the floor runs itself 🚬",
         "boss break.",
         "thinking big thoughts 🚬",
-        "I DECLARE… a break"
+        "I DECLARE… a break",
+        "stepping out to clear my head",
+        "back in five. probably."
       ]
     },
     "suckUp": [
@@ -768,7 +782,9 @@
       "I was JUST about to do exactly that!",
       "love the tie today, {{orchestratorName}}",
       "working hard, boss! 💪",
-      "best boss ever. genuinely."
+      "best boss ever. genuinely.",
+      "your leadership really inspires my status updates",
+      "I can take that extra task, {{orchestratorName}}!"
     ],
     "gossip": [
       "has he ever actually written code?",
@@ -777,7 +793,9 @@
       "he pinned MY task as his idea",
       "the cigar smell, honestly…",
       "he watered the plant. ONE plant. his own.",
-      "did you hear him? 'I DECLARE… a break'"
+      "did you hear that? 'I DECLARE… a break'",
+      "the meeting could have been a shorter meeting",
+      "someone changed the plan again. bold move."
     ],
     "cheer": [
       "done! ✔",
@@ -786,7 +804,9 @@
       "ship it 🚀",
       "another one done",
       "crushed it",
-      "in the books"
+      "in the books",
+      "that one’s off my plate",
+      "green checks all around ✔"
     ],
     "mugs": {
       "empty": "no clean mugs left…",

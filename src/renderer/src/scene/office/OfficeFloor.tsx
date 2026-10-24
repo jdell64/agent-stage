@@ -13,6 +13,7 @@ import { MessageEnvelope, type MessageAct } from './MessageEnvelope';
 import { hexToNumber, DEFAULT_CHARACTER } from './cast';
 import { pickSoloLine, pickExchange, type BreakSpot } from './cafeteriaLines';
 import { colors } from '@/design/tokens';
+import { pickQuip, shouldShowWorkingQuip } from './themeQuips';
 import { loadTheme, resolveThemeMap, themeTilesetUrls, applyThemeChrome } from './themeLoader';
 import {
   installContextLossRecovery, planInitFailure, DEFAULT_MAX_INIT_RETRIES
@@ -87,13 +88,13 @@ const CHEER_MIN_BUSY_MS = 60_000;
 /** What an avatar mutters per errand, picked at random. i18n keys into
  *  `office.errand.*`. */
 const ERRAND_THOUGHTS: Record<ErrandKind, readonly string[]> = {
-  water:     ['office.errand.water.0', 'office.errand.water.1', 'office.errand.water.2'],
-  window:    ['office.errand.window.0', 'office.errand.window.1', 'office.errand.window.2'],
-  dispenser: ['office.errand.dispenser.0', 'office.errand.dispenser.1', 'office.errand.dispenser.2'],
-  fridge:    ['office.errand.fridge.0', 'office.errand.fridge.1', 'office.errand.fridge.2'],
-  shelf:     ['office.errand.shelf.0', 'office.errand.shelf.1', 'office.errand.shelf.2'],
-  bin:       ['office.errand.bin.0', 'office.errand.bin.1', 'office.errand.bin.2'],
-  smoke:     ['office.errand.smoke.0', 'office.errand.smoke.1', 'office.errand.smoke.2', 'office.errand.smoke.3']
+  water:     ['office.errand.water.0', 'office.errand.water.1', 'office.errand.water.2', 'office.errand.water.3', 'office.errand.water.4'],
+  window:    ['office.errand.window.0', 'office.errand.window.1', 'office.errand.window.2', 'office.errand.window.3', 'office.errand.window.4'],
+  dispenser: ['office.errand.dispenser.0', 'office.errand.dispenser.1', 'office.errand.dispenser.2', 'office.errand.dispenser.3', 'office.errand.dispenser.4'],
+  fridge:    ['office.errand.fridge.0', 'office.errand.fridge.1', 'office.errand.fridge.2', 'office.errand.fridge.3', 'office.errand.fridge.4'],
+  shelf:     ['office.errand.shelf.0', 'office.errand.shelf.1', 'office.errand.shelf.2', 'office.errand.shelf.3', 'office.errand.shelf.4'],
+  bin:       ['office.errand.bin.0', 'office.errand.bin.1', 'office.errand.bin.2', 'office.errand.bin.3', 'office.errand.bin.4'],
+  smoke:     ['office.errand.smoke.0', 'office.errand.smoke.1', 'office.errand.smoke.2', 'office.errand.smoke.3', 'office.errand.smoke.4', 'office.errand.smoke.5']
 };
 
 /** What workers blurt out when the boss walks by — performative excellence.
@@ -105,7 +106,9 @@ const SUCK_UP_KEYS = [
   'office.suckUp.3',
   'office.suckUp.4',
   'office.suckUp.5',
-  'office.suckUp.6'
+  'office.suckUp.6',
+  'office.suckUp.7',
+  'office.suckUp.8'
 ] as const;
 
 /** What they actually say once he's out of earshot. */
@@ -116,7 +119,9 @@ const GOSSIP_KEYS = [
   'office.gossip.3',
   'office.gossip.4',
   'office.gossip.5',
-  'office.gossip.6'
+  'office.gossip.6',
+  'office.gossip.7',
+  'office.gossip.8'
 ] as const;
 
 /** Lines an avatar throws over its shoulder right after finishing a task. */
@@ -127,7 +132,9 @@ const CHEER_KEYS = [
   'office.cheer.3',
   'office.cheer.4',
   'office.cheer.5',
-  'office.cheer.6'
+  'office.cheer.6',
+  'office.cheer.7',
+  'office.cheer.8'
 ] as const;
 
 /** Load a texture via an <img> element. Unlike Pixi's Assets.load(), this
@@ -167,7 +174,7 @@ function firstWords(prompt: string | undefined, maxWords = 6, maxChars = 42): st
   return out;
 }
 
-export function OfficeFloor() {
+export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) {
   const { t, i18n } = useTranslation();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const appRef = useRef<Application | null>(null);
@@ -216,7 +223,7 @@ export function OfficeFloor() {
     document.addEventListener('visibilitychange', onVis);
     return () => document.removeEventListener('visibilitychange', onVis);
   }, []);
-  const paused = !!fullscreenAgentId || ideOpen || docHidden;
+  const paused = isMinimized || !!fullscreenAgentId || ideOpen || docHidden;
   // Read inside init(), which finishes asynchronously and would otherwise start a
   // ticker the effect below had already been asked to stop.
   const pausedRef = useRef(paused);
@@ -452,6 +459,20 @@ export function OfficeFloor() {
       const agentById = (id: string): Agent | undefined =>
         useStore.getState().agents.find((a) => a.id === id);
 
+      const previousQuips = new Map<string, string>();
+      const showQuip = (
+        id: string,
+        rt: Runtime,
+        status: 'working' | 'idle' | 'waiting' | 'blocked' | 'error' | 'done',
+        genericLines: readonly string[],
+        carrying?: string,
+      ): void => {
+        const line = pickQuip(genericLines, theme.quips, status, rt.charName, previousQuips.get(id));
+        if (!line) return;
+        previousQuips.set(id, line);
+        rt.character.showThought(line, carrying);
+      };
+
       // ─── The coffee economy: sideboard → machine → desk → sink → sideboard ─
       // A finite stock of mugs lives on a sideboard next to the kitchen counter.
       // Brewing requires a mug in hand (a clean one off the rack, or your own
@@ -633,10 +654,10 @@ export function OfficeFloor() {
         // the proximity director below).
         const p = rt.character.getPixelPosition();
         if (orchestratorDistance(p.x, p.y) > 96 && Math.random() < 0.35) {
-          rt.character.showThought(t(GOSSIP_KEYS[Math.floor(Math.random() * GOSSIP_KEYS.length)]));
+          showQuip(id, rt, 'idle', GOSSIP_KEYS.map((key) => t(key)));
           return;
         }
-        rt.character.showThought(pickSoloLine(character, spot.spot, seed));
+        showQuip(id, rt, 'idle', [pickSoloLine(character, spot.spot, seed)]);
       };
 
       // If the newcomer's table-mate is already lingering (and neither is mid-
@@ -939,7 +960,7 @@ export function OfficeFloor() {
           rt!.err.timer = 0;
           c.faceDirection(spot.facing);
           const lines = ERRAND_THOUGHTS[spot.kind];
-          c.showThought(t(lines[Math.floor(Math.random() * lines.length)]));
+          showQuip(agent!.id, rt, 'idle', lines.map((key) => t(key)));
           const finish = (): void => {
             const wasOrchestrator = !!agent!.isOrchestrator;
             releaseErrand(rt!);
@@ -1001,8 +1022,7 @@ export function OfficeFloor() {
           lastSuckUp.set(id, now);
           const done = doneByAssignee.get(id) ?? 0;
           const pool = done > 0 ? SUCK_UP_KEYS : SUCK_UP_KEYS.slice(2);
-          const line = pool[Math.floor(Math.random() * pool.length)];
-          rt.character.showThought(t(line, { done: String(done) }));
+          showQuip(id, rt, 'idle', pool.map((key) => t(key, { done: String(done) })));
           rt.character.hideThought(); // linger briefly, then fade
         }
       };
@@ -1467,6 +1487,7 @@ export function OfficeFloor() {
           drawTray();
         }
         if (rt.seatIndex != null) seatClaims.delete(rt.seatIndex);
+        previousQuips.delete(id);
         rt.screen?.destroy();
         rt.character.hide(0);
         // give the fade-out a moment, then destroy
@@ -1537,6 +1558,12 @@ export function OfficeFloor() {
         // blocked → walk to the door and flash "!"; done/idle → wander.
         switch (agent.status) {
           case 'working':
+            c.setStatusGlyph('none');
+            c.sitAtDesk(true);
+            if (agent.action?.trim()) c.showThought(liveActivity(agent), agent.carrying);
+            else if (shouldShowWorkingQuip(false)) showQuip(agent.id, rt, 'working', [liveActivity(agent)], agent.carrying);
+            else c.showThought(liveActivity(agent), agent.carrying);
+            break;
           case 'thinking':
             c.setStatusGlyph('none');
             c.sitAtDesk(true);
@@ -1575,7 +1602,7 @@ export function OfficeFloor() {
             c.startWandering();
             if (finishedWork) {
               c.cheer();
-              c.showThought(t(CHEER_KEYS[Math.floor(Math.random() * CHEER_KEYS.length)]));
+              showQuip(agent.id, rt, 'done', CHEER_KEYS.map((key) => t(key)));
             } else {
               c.hideThought();
             }
@@ -1589,14 +1616,14 @@ export function OfficeFloor() {
           default:
             c.setStatusGlyph('none');
             // The orchestrator runs the floor from its desk; everyone else wanders when idle.
-            if (agent.isOrchestrator) { c.sitAtDesk(true); c.showThought(liveActivity(agent, t('office.activity.runningFloor'))); }
+            if (agent.isOrchestrator) { c.sitAtDesk(true); showQuip(agent.id, rt, 'idle', [liveActivity(agent, t('office.activity.runningFloor'))]); }
             else if (finishedWork) {
               // Task done → a quick cheer on the spot, then back to roaming.
               c.startWandering();
               c.cheer();
-              c.showThought(t(CHEER_KEYS[Math.floor(Math.random() * CHEER_KEYS.length)]));
+              showQuip(agent.id, rt, 'done', CHEER_KEYS.map((key) => t(key)));
             }
-            else { c.startWandering(); c.showThought(liveActivity(agent, t('office.activity.idle'))); }
+            else { c.startWandering(); showQuip(agent.id, rt, 'idle', [liveActivity(agent, t('office.activity.idle'))]); }
             break;
         }
       };

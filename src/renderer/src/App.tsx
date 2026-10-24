@@ -34,6 +34,7 @@ import { IdePanel } from '@/ide/IdePanel';
 import { useHoldOptionToTalk } from '@/freeflow/holdOption';
 import brandLogo from '@brand/logo.png?url';
 import { DEFAULT_THEME_ID } from '@shared/themePack';
+import { readViewScreenCollapsed, writeViewScreenCollapsed } from '@/components/viewScreenPreference';
 
 // Injected at build time from package.json (see electron.vite.config.ts).
 declare const __APP_VERSION__: string;
@@ -81,6 +82,12 @@ export function App() {
   const [quitWarn, setQuitWarn] = useState<{ ptyCount: number } | null>(null);
   const [closing, setClosing] = useState<ClosingTimeState | null>(null);
   const [vpWidth, setVpWidth] = useState<number>(window.innerWidth);
+  const [viewScreenCollapsed, setViewScreenCollapsed] = useState(() => readViewScreenCollapsed());
+  const toggleViewScreen = (): void => {
+    const next = !viewScreenCollapsed;
+    setViewScreenCollapsed(next);
+    writeViewScreenCollapsed(next);
+  };
 
   // Deep link into Settings from anywhere in the tree. Settings' open state is
   // local to App, so a nested control (e.g. "set it now" beside a disabled Talk
@@ -401,11 +408,51 @@ export function App() {
         padding: 16,
         gap: 0
       }}>
-        <div style={{ flex: 1, minHeight: 0, minWidth: 0, position: 'relative' }}>
-          <OfficeFloor />
-          <MemoryPanel />
-          {agentCount === 0 && orchestratorStatus === 'booting' && <OrchestratorBooting />}
-          {agentCount === 0 && orchestratorStatus !== 'booting' && (
+        <div style={{
+          flex: viewScreenCollapsed ? '0 0 42px' : 1,
+          minHeight: 0, minWidth: 0, position: 'relative',
+          overflow: 'hidden', transition: 'flex-basis 180ms ease'
+        }}>
+          <div id="office-view-canvas" style={{ position: 'absolute', inset: 0, display: viewScreenCollapsed ? 'none' : 'block' }}>
+            <OfficeFloor isMinimized={viewScreenCollapsed} />
+            <MemoryPanel />
+          </div>
+          {viewScreenCollapsed ? (
+            <button
+              type="button"
+              onClick={toggleViewScreen}
+              aria-label="Expand office view"
+              aria-expanded={false}
+              title="Expand office view"
+              style={{
+                width: 38, height: '100%', border: 0, borderRight: '1px solid var(--cth-ink-300)',
+                background: 'var(--cth-paper-100)', color: 'var(--cth-ink-700)', cursor: 'pointer',
+                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8
+              }}
+            >
+              <span aria-hidden="true" style={{ fontSize: 22, lineHeight: 1 }}>›</span>
+              <span style={{ writingMode: 'vertical-rl', fontSize: 10, letterSpacing: 1 }}>OFFICE VIEW</span>
+            </button>
+          ) : (
+            <button
+                type="button"
+                onClick={toggleViewScreen}
+                aria-label="Minimize office view"
+                aria-expanded={true}
+                aria-controls="office-view-canvas"
+                title="Minimize office view"
+                style={{
+                  position: 'absolute', zIndex: 5, top: 8, left: 8,
+                  border: '1px solid var(--cth-ink-300)', borderRadius: 2,
+                  background: 'var(--cth-paper-100)', color: 'var(--cth-ink-900)',
+                  padding: '4px 8px', cursor: 'pointer', font: 'inherit', fontSize: 11
+                }}
+              >
+                Minimize view <span aria-hidden="true">‹</span>
+            </button>
+          )}
+          {!viewScreenCollapsed && agentCount === 0 && orchestratorStatus === 'booting' && <OrchestratorBooting />}
+          {!viewScreenCollapsed && agentCount === 0 && orchestratorStatus !== 'booting' && (
             <div style={{
               position: 'absolute', inset: 0,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -429,14 +476,16 @@ export function App() {
           )}
         </div>
 
-        <SidebarSplitter
+        {!viewScreenCollapsed && <SidebarSplitter
           width={sidebarWidth}
           onChange={setSidebarWidth}
           viewportWidth={vpWidth}
-        />
+        />}
 
         <div style={{
-          width: sidebarWidth, flexShrink: 0,
+          width: viewScreenCollapsed ? undefined : sidebarWidth,
+          flex: viewScreenCollapsed ? 1 : '0 0 auto',
+          minWidth: 0,
           minHeight: 0, display: 'flex', flexDirection: 'column'
         }}>
           {agent ? (
