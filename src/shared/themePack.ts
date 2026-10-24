@@ -77,6 +77,12 @@ export interface AnchorConfig { calendar: Tile; boards: Tile; clock: Tile; }
 /** Optional tile-space action rectangle used by automatic camera fitting. */
 export interface CameraBounds { x: number; y: number; width: number; height: number; }
 
+export type ThemeQuipStatus = 'working' | 'idle' | 'error';
+export interface ThemeQuips {
+  byStatus?: Partial<Record<ThemeQuipStatus, string[]>>;
+  byCharacter?: Record<string, string[]>;
+}
+
 // ─── on-disk shapes ─────────────────────────────────────────────────────────
 export interface Issue {
   level: 'error' | 'warn';
@@ -116,6 +122,7 @@ export interface PackManifest {
   coffee?: CoffeeConfig;
   anchors: AnchorConfig;
   cameraBounds?: CameraBounds;
+  quips?: ThemeQuips;
   errandSpots: ErrandSpot[];
   monitor: MonitorConfig;
   palette: { background: string; noteColors: Record<string, string> };
@@ -496,6 +503,56 @@ export function validatePack(input: ValidateInput): ValidateResult {
     const ok = isObj(b) && isInt(b.x) && isInt(b.y) && isInt(b.width) && isInt(b.height)
       && b.width > 0 && b.height > 0 && b.x >= 0 && b.y >= 0 && b.x + b.width <= W && b.y + b.height <= H;
     if (!ok) { warn('bad-camera-bounds', 'cameraBounds', 'cameraBounds must be an in-map tile rect; ignored'); delete out.cameraBounds; }
+  }
+
+  if (manifest.quips !== undefined) {
+    if (!isObj(manifest.quips)) warn('bad-quips', 'quips', 'quips must be an object; ignored');
+    const raw = isObj(manifest.quips) ? manifest.quips : {};
+    const cleanLines = (value: unknown, path: string): string[] | undefined => {
+      if (!Array.isArray(value)) {
+        warn('bad-quips', path, 'quip lines must be an array of non-empty strings; ignored');
+        return undefined;
+      }
+      const lines = value.filter((line): line is string => {
+        const valid = typeof line === 'string' && line.trim().length > 0 && line.trim().length <= 180;
+        if (!valid) warn('bad-quips', path, 'invalid quip ignored (must be 1–180 characters)');
+        return valid;
+      }).slice(0, 50).map((line) => line.trim());
+      if (value.length > 50) warn('bad-quips', path, 'only the first 50 quips are used');
+      return lines.length ? lines : undefined;
+    };
+    const byStatus: NonNullable<ThemeQuips['byStatus']> = {};
+    if (raw.byStatus !== undefined) {
+      if (!isObj(raw.byStatus)) warn('bad-quips', 'quips.byStatus', 'byStatus must be an object; ignored');
+      else {
+        for (const key of Object.keys(raw.byStatus)) {
+          if (!['working', 'idle', 'error'].includes(key)) warn('bad-quips', `quips.byStatus.${key}`, 'unknown status key; ignored');
+        }
+        for (const status of ['working', 'idle', 'error'] as const) {
+          if (raw.byStatus[status] !== undefined) {
+            const lines = cleanLines(raw.byStatus[status], `quips.byStatus.${status}`);
+            if (lines) byStatus[status] = lines;
+          }
+        }
+      }
+    }
+    const byCharacter: NonNullable<ThemeQuips['byCharacter']> = {};
+    if (raw.byCharacter !== undefined) {
+      if (!isObj(raw.byCharacter)) warn('bad-quips', 'quips.byCharacter', 'byCharacter must be an object; ignored');
+      else for (const [name, value] of Object.entries(raw.byCharacter)) {
+        if (!/^[a-z0-9_-]{1,40}$/i.test(name) || name.toLowerCase() === '__proto__') {
+          warn('bad-quips', `quips.byCharacter.${name}`, 'character keys must be 1–40 letters, digits, _ or -; ignored');
+          continue;
+        }
+        const lines = cleanLines(value, `quips.byCharacter.${name}`);
+        if (lines) Object.defineProperty(byCharacter, name.toLowerCase(), {
+          value: lines, enumerable: true, configurable: true, writable: true,
+        });
+      }
+    }
+    if (Object.keys(byStatus).length || Object.keys(byCharacter).length) {
+      out.quips = { ...(Object.keys(byStatus).length ? { byStatus } : {}), ...(Object.keys(byCharacter).length ? { byCharacter } : {}) };
+    } else delete out.quips;
   }
 
   const c = manifest.coffee;

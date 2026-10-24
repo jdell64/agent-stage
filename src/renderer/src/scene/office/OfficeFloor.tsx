@@ -13,6 +13,7 @@ import { MessageEnvelope, type MessageAct } from './MessageEnvelope';
 import { hexToNumber, DEFAULT_CHARACTER } from './cast';
 import { pickSoloLine, pickExchange, type BreakSpot } from './cafeteriaLines';
 import { colors } from '@/design/tokens';
+import { pickQuip } from './themeQuips';
 import { loadTheme, resolveThemeMap, themeTilesetUrls, applyThemeChrome } from './themeLoader';
 import {
   installContextLossRecovery, planInitFailure, DEFAULT_MAX_INIT_RETRIES
@@ -167,7 +168,7 @@ function firstWords(prompt: string | undefined, maxWords = 6, maxChars = 42): st
   return out;
 }
 
-export function OfficeFloor() {
+export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) {
   const { t, i18n } = useTranslation();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const appRef = useRef<Application | null>(null);
@@ -216,7 +217,7 @@ export function OfficeFloor() {
     document.addEventListener('visibilitychange', onVis);
     return () => document.removeEventListener('visibilitychange', onVis);
   }, []);
-  const paused = !!fullscreenAgentId || ideOpen || docHidden;
+  const paused = isMinimized || !!fullscreenAgentId || ideOpen || docHidden;
   // Read inside init(), which finishes asynchronously and would otherwise start a
   // ticker the effect below had already been asked to stop.
   const pausedRef = useRef(paused);
@@ -452,6 +453,20 @@ export function OfficeFloor() {
       const agentById = (id: string): Agent | undefined =>
         useStore.getState().agents.find((a) => a.id === id);
 
+      const previousQuips = new Map<string, string>();
+      const showQuip = (
+        id: string,
+        rt: Runtime,
+        status: 'working' | 'idle' | 'error',
+        genericLines: readonly string[],
+        carrying?: string,
+      ): void => {
+        const line = pickQuip(genericLines, theme.quips, status, rt.charName, previousQuips.get(id));
+        if (!line) return;
+        previousQuips.set(id, line);
+        rt.character.showThought(line, carrying);
+      };
+
       // ─── The coffee economy: sideboard → machine → desk → sink → sideboard ─
       // A finite stock of mugs lives on a sideboard next to the kitchen counter.
       // Brewing requires a mug in hand (a clean one off the rack, or your own
@@ -633,10 +648,10 @@ export function OfficeFloor() {
         // the proximity director below).
         const p = rt.character.getPixelPosition();
         if (orchestratorDistance(p.x, p.y) > 96 && Math.random() < 0.35) {
-          rt.character.showThought(t(GOSSIP_KEYS[Math.floor(Math.random() * GOSSIP_KEYS.length)]));
+          showQuip(id, rt, 'idle', GOSSIP_KEYS.map((key) => t(key)));
           return;
         }
-        rt.character.showThought(pickSoloLine(character, spot.spot, seed));
+        showQuip(id, rt, 'idle', [pickSoloLine(character, spot.spot, seed)]);
       };
 
       // If the newcomer's table-mate is already lingering (and neither is mid-
@@ -939,7 +954,7 @@ export function OfficeFloor() {
           rt!.err.timer = 0;
           c.faceDirection(spot.facing);
           const lines = ERRAND_THOUGHTS[spot.kind];
-          c.showThought(t(lines[Math.floor(Math.random() * lines.length)]));
+          showQuip(agent!.id, rt, 'idle', lines.map((key) => t(key)));
           const finish = (): void => {
             const wasOrchestrator = !!agent!.isOrchestrator;
             releaseErrand(rt!);
@@ -1001,8 +1016,7 @@ export function OfficeFloor() {
           lastSuckUp.set(id, now);
           const done = doneByAssignee.get(id) ?? 0;
           const pool = done > 0 ? SUCK_UP_KEYS : SUCK_UP_KEYS.slice(2);
-          const line = pool[Math.floor(Math.random() * pool.length)];
-          rt.character.showThought(t(line, { done: String(done) }));
+          showQuip(id, rt, 'idle', pool.map((key) => t(key, { done: String(done) })));
           rt.character.hideThought(); // linger briefly, then fade
         }
       };
@@ -1467,6 +1481,7 @@ export function OfficeFloor() {
           drawTray();
         }
         if (rt.seatIndex != null) seatClaims.delete(rt.seatIndex);
+        previousQuips.delete(id);
         rt.screen?.destroy();
         rt.character.hide(0);
         // give the fade-out a moment, then destroy
@@ -1540,7 +1555,7 @@ export function OfficeFloor() {
           case 'thinking':
             c.setStatusGlyph('none');
             c.sitAtDesk(true);
-            c.showThought(liveActivity(agent), agent.carrying);
+            showQuip(agent.id, rt, 'working', [liveActivity(agent)], agent.carrying);
             break;
           case 'waiting':
             // Parked at the desk awaiting orchestrator / another agent — not actively
@@ -1548,11 +1563,11 @@ export function OfficeFloor() {
             // agents that need the human).
             c.setStatusGlyph('none');
             c.sitAtDesk(false);
-            c.showThought(liveActivity(agent, t('office.activity.waiting')), agent.carrying);
+            showQuip(agent.id, rt, 'idle', [liveActivity(agent, t('office.activity.waiting'))], agent.carrying);
             break;
           case 'blocked':
             c.setStatusGlyph('blocked');
-            c.showThought(liveActivity(agent, t('office.activity.needsYou')));
+            showQuip(agent.id, rt, 'error', [liveActivity(agent, t('office.activity.needsYou'))]);
             c.walkToTile(rt.waitTile);
             break;
           case 'compacting':
@@ -1560,14 +1575,14 @@ export function OfficeFloor() {
             // so an agent compacting context reads as busy rather than frozen.
             c.setStatusGlyph('compacting');
             c.sitAtDesk(true);
-            c.showThought(liveActivity(agent, t('office.activity.compacting')));
+            showQuip(agent.id, rt, 'working', [liveActivity(agent, t('office.activity.compacting'))]);
             break;
           case 'looping':
             // #5C — circuit-breaker armed (#6): hold position with the spinning
             // warning glyph so a runaway agent is visible on the floor.
             c.setStatusGlyph('looping');
             c.sitAtDesk(false);
-            c.showThought(liveActivity(agent, t('office.activity.looping')));
+            showQuip(agent.id, rt, 'error', [liveActivity(agent, t('office.activity.looping'))]);
             break;
           case 'success':
             c.setStatusGlyph('success');
@@ -1575,7 +1590,7 @@ export function OfficeFloor() {
             c.startWandering();
             if (finishedWork) {
               c.cheer();
-              c.showThought(t(CHEER_KEYS[Math.floor(Math.random() * CHEER_KEYS.length)]));
+              showQuip(agent.id, rt, 'idle', CHEER_KEYS.map((key) => t(key)));
             } else {
               c.hideThought();
             }
@@ -1589,14 +1604,14 @@ export function OfficeFloor() {
           default:
             c.setStatusGlyph('none');
             // The orchestrator runs the floor from its desk; everyone else wanders when idle.
-            if (agent.isOrchestrator) { c.sitAtDesk(true); c.showThought(liveActivity(agent, t('office.activity.runningFloor'))); }
+            if (agent.isOrchestrator) { c.sitAtDesk(true); showQuip(agent.id, rt, 'idle', [liveActivity(agent, t('office.activity.runningFloor'))]); }
             else if (finishedWork) {
               // Task done → a quick cheer on the spot, then back to roaming.
               c.startWandering();
               c.cheer();
-              c.showThought(t(CHEER_KEYS[Math.floor(Math.random() * CHEER_KEYS.length)]));
+              showQuip(agent.id, rt, 'idle', CHEER_KEYS.map((key) => t(key)));
             }
-            else { c.startWandering(); c.showThought(liveActivity(agent, t('office.activity.idle'))); }
+            else { c.startWandering(); showQuip(agent.id, rt, 'idle', [liveActivity(agent, t('office.activity.idle'))]); }
             break;
         }
       };

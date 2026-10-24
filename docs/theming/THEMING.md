@@ -72,6 +72,10 @@ my-office/
   "monitor": { "offTopLeftGid": 6, "onGids": [[7, 0, 0]] },   // the screen tile and its "on" swap
   "palette": { "background": "#14151c",
                "noteColors": { "todo": "#f2df8a", "doing": "#9ecbf0", "blocked": "#f0a3a3", "done": "#a8e0b0" } },
+  "quips": {                    // optional additions to generic thought-bubble lines
+    "byStatus": { "working": ["On it."], "idle": ["Taking five."], "error": ["I need a hand."] },
+    "byCharacter": { "picard": ["Make it so."] }
+  },
   "copy": { "orchestratorName": "Captain" },   // optional, see below
   "fonts": [], "chrome": { "tokens": "chrome/tokens.css", "defaultMode": "dark" }
 }
@@ -79,7 +83,16 @@ my-office/
 
 Required: `schema`, `id`, `name`, `version`, `author`, `license`, `map`, `tilesets`, `seats`,
 `anchors`, `monitor`, `palette`. Everything else is optional. Bad optional fields (fonts,
-tokens, copy, cast) are reported as warnings and dropped, never fatal.
+tokens, copy, cast, quips) are reported as warnings and dropped, never fatal.
+
+### Speech-bubble quips
+
+`quips.byStatus` accepts optional arrays for `working`, `idle`, and `error`; `quips.byCharacter`
+accepts arrays keyed by the character's cast `name` (case-insensitive). Lines from both matching
+keys are added to the app's existing generic lines, then selected at random without repeating the
+previous line for that agent when alternatives exist. Each list accepts up to 50 non-empty lines,
+each at most 180 characters. Invalid lines are warned about and ignored. Theme quips are plain text;
+they do not replace the activity details and generic dialogue the app already supplies.
 
 ### Naming the orchestrator
 

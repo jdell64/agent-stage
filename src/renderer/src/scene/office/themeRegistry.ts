@@ -16,7 +16,7 @@ import type { Texture } from 'pixi.js';
 import {
   type CastMember,
 } from './cast';
-import type { ThemeId } from '@shared/themePack';
+import type { ThemeId, ThemeQuips } from '@shared/themePack';
 
 export type { ThemeId };
 
@@ -137,6 +137,8 @@ export interface ThemeConfig {
   anchors: AnchorConfig;
   /** Optional tile-space action rectangle for auto-fit; absent fits the whole map. */
   cameraBounds?: CameraBounds;
+  /** Optional, already validated pack-provided additions to generic thought lines. */
+  quips?: ThemeQuips;
   errandSpots: ErrandSpot[];
   monitor: MonitorConfig;
   palette: PaletteConfig;
