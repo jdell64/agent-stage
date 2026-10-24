@@ -88,13 +88,13 @@ const CHEER_MIN_BUSY_MS = 60_000;
 /** What an avatar mutters per errand, picked at random. i18n keys into
  *  `office.errand.*`. */
 const ERRAND_THOUGHTS: Record<ErrandKind, readonly string[]> = {
-  water:     ['office.errand.water.0', 'office.errand.water.1', 'office.errand.water.2'],
-  window:    ['office.errand.window.0', 'office.errand.window.1', 'office.errand.window.2'],
-  dispenser: ['office.errand.dispenser.0', 'office.errand.dispenser.1', 'office.errand.dispenser.2'],
-  fridge:    ['office.errand.fridge.0', 'office.errand.fridge.1', 'office.errand.fridge.2'],
-  shelf:     ['office.errand.shelf.0', 'office.errand.shelf.1', 'office.errand.shelf.2'],
-  bin:       ['office.errand.bin.0', 'office.errand.bin.1', 'office.errand.bin.2'],
-  smoke:     ['office.errand.smoke.0', 'office.errand.smoke.1', 'office.errand.smoke.2', 'office.errand.smoke.3']
+  water:     ['office.errand.water.0', 'office.errand.water.1', 'office.errand.water.2', 'office.errand.water.3', 'office.errand.water.4'],
+  window:    ['office.errand.window.0', 'office.errand.window.1', 'office.errand.window.2', 'office.errand.window.3', 'office.errand.window.4'],
+  dispenser: ['office.errand.dispenser.0', 'office.errand.dispenser.1', 'office.errand.dispenser.2', 'office.errand.dispenser.3', 'office.errand.dispenser.4'],
+  fridge:    ['office.errand.fridge.0', 'office.errand.fridge.1', 'office.errand.fridge.2', 'office.errand.fridge.3', 'office.errand.fridge.4'],
+  shelf:     ['office.errand.shelf.0', 'office.errand.shelf.1', 'office.errand.shelf.2', 'office.errand.shelf.3', 'office.errand.shelf.4'],
+  bin:       ['office.errand.bin.0', 'office.errand.bin.1', 'office.errand.bin.2', 'office.errand.bin.3', 'office.errand.bin.4'],
+  smoke:     ['office.errand.smoke.0', 'office.errand.smoke.1', 'office.errand.smoke.2', 'office.errand.smoke.3', 'office.errand.smoke.4', 'office.errand.smoke.5']
 };
 
 /** What workers blurt out when the boss walks by — performative excellence.
@@ -106,7 +106,9 @@ const SUCK_UP_KEYS = [
   'office.suckUp.3',
   'office.suckUp.4',
   'office.suckUp.5',
-  'office.suckUp.6'
+  'office.suckUp.6',
+  'office.suckUp.7',
+  'office.suckUp.8'
 ] as const;
 
 /** What they actually say once he's out of earshot. */
@@ -117,7 +119,9 @@ const GOSSIP_KEYS = [
   'office.gossip.3',
   'office.gossip.4',
   'office.gossip.5',
-  'office.gossip.6'
+  'office.gossip.6',
+  'office.gossip.7',
+  'office.gossip.8'
 ] as const;
 
 /** Lines an avatar throws over its shoulder right after finishing a task. */
@@ -128,7 +132,9 @@ const CHEER_KEYS = [
   'office.cheer.3',
   'office.cheer.4',
   'office.cheer.5',
-  'office.cheer.6'
+  'office.cheer.6',
+  'office.cheer.7',
+  'office.cheer.8'
 ] as const;
 
 /** Load a texture via an <img> element. Unlike Pixi's Assets.load(), this
