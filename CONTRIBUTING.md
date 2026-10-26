@@ -28,6 +28,7 @@ Contributions are welcome through pull requests. Keep them easy to review.
 ## Working in the repository
 
 - Agent Stage supports macOS, Windows, and Linux. Use platform-safe paths and avoid shell assumptions.
+- For parallel work on this Windows development host, create task worktrees under `C:/dev/worktrees/agent-stage/<task>` (for example, `C:/dev/worktrees/agent-stage/fix-taskbar-icon`) rather than inside the repository checkout. Keep the main checkout untouched.
 - Quote paths and account for directories with spaces.
 - Keep provider-specific behavior behind an explicit check. Shared behavior must remain provider-neutral.
 - Do not assume another developer's files, credentials, processes, or shell are available.
