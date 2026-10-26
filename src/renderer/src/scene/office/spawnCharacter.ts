@@ -9,6 +9,16 @@
  *  and only when the whole cast is taken a stable hash of the id. */
 export interface SpawnCastMember { name: string; displayName: string }
 
+/** Keep a persisted theme character through the restart respawn path.
+ *
+ * The built-in `normalizeCharacter` helper only understands the procedural
+ * cast. Applying it here replaced valid theme entries such as TNG's `picard`
+ * with the built-in fallback before the active theme could resolve the portrait.
+ */
+export function restorePersistedCharacter(saved: string | undefined, fallback: string): string {
+  return saved?.trim() || fallback;
+}
+
 /** Resolve a saved agent character against the active theme, matching the
  * portrait's theme-cast lookup and the floor's default when it is unavailable. */
 export function resolveFloorCharacter(character: string, cast: {

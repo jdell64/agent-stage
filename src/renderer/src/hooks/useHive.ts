@@ -23,10 +23,10 @@ import { inboxNudgeText } from '../../../shared/hiveNudge';
 import { resolveOrchestratorName, setThemeOrchestratorName } from '../../../shared/orchestratorIdentity';
 import { acquireTerminal, resetTerminal, isTerminalAutomationSafe } from '@/components/terminalPool';
 import { canDeliverToAgent, deliverWithAcknowledgement, checkPrecondition } from './queueDelivery';
-import { pickSpawnCharacter } from '@/scene/office/spawnCharacter';
+import { pickSpawnCharacter, restorePersistedCharacter } from '@/scene/office/spawnCharacter';
 import { getTheme } from '@/scene/office/themeRegistry';
 import { loadTheme } from '@/scene/office/themeLoader';
-import { CAST, DEFAULT_CHARACTER, ORCHESTRATOR_CHARACTER, normalizeCharacter } from '@/scene/office/cast';
+import { CAST, DEFAULT_CHARACTER, ORCHESTRATOR_CHARACTER } from '@/scene/office/cast';
 
 const ORCHESTRATOR_ID = 'orchestrator';
 /** Accent palette for MAIN-spawned (voice-hired) agents — picked deterministically
@@ -454,7 +454,7 @@ export function useHive(config: HarnessConfig | null): void {
       const orchestrator: Agent = {
         id: ORCHESTRATOR_ID,
         name: orchestratorName,
-        character: restoredLook?.character ? normalizeCharacter(restoredLook.character) : ORCHESTRATOR_CHARACTER,
+        character: restorePersistedCharacter(restoredLook?.character, ORCHESTRATOR_CHARACTER),
         accent: restoredLook?.accent ?? 'lemon',
         description: 'Orchestrator — runs the floor, triages requests, escalates only critical calls to you',
         project: 'hive',

@@ -1,6 +1,5 @@
 import { create } from 'zustand';
 import type { AccentColorName } from '@/design/tokens';
-import type { CharacterName } from '@/scene/office/cast';
 import type { ThemeId } from '@/scene/office/themeRegistry';
 import type { StatusKind } from '@/components/PixelBadge';
 import type { AgentProvider } from '@shared/agentProvider';
@@ -42,7 +41,7 @@ export interface Agent {
   id: string;
   name: string;
   /** which Office character represents this agent on the floor */
-  character: CharacterName;
+  character: string;
   accent: AccentColorName;
   /** persistent job / hire one-liner — same string as hive registry `role`.
    *  Live status belongs on `status` / `action`, never here. */
@@ -453,8 +452,8 @@ function slimAgents(agents: Agent[]): PersistedAgent[] {
  *  their pty died with the previous session and that respawn on their own
  *  (orchestrator, assistant). In memory only: the respawn happens seconds later
  *  in the same renderer session and re-persists the card. */
-const departedLooks = new Map<string, { character: CharacterName; accent: AccentColorName }>();
-export function takeDepartedLook(id: string): { character: CharacterName; accent: AccentColorName } | undefined {
+const departedLooks = new Map<string, { character: string; accent: AccentColorName }>();
+export function takeDepartedLook(id: string): { character: string; accent: AccentColorName } | undefined {
   const look = departedLooks.get(id);
   departedLooks.delete(id);
   return look;

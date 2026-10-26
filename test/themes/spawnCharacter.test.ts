@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pickSpawnCharacter, resolveFloorCharacter } from '../../src/renderer/src/scene/office/spawnCharacter';
+import { pickSpawnCharacter, resolveFloorCharacter, restorePersistedCharacter } from '../../src/renderer/src/scene/office/spawnCharacter';
 
 const office = ['michael', 'jim', 'pam', 'dwight', 'ryan'].map((n) => ({ name: n, displayName: n[0].toUpperCase() + n.slice(1) }));
 
@@ -36,5 +36,15 @@ describe('resolveFloorCharacter', () => {
   });
   it('uses the active theme default when the selected character is unavailable', () => {
     expect(resolveFloorCharacter('troi', cast)).toBe('michael');
+  });
+});
+
+describe('restorePersistedCharacter', () => {
+  it('retains a theme-specific orchestrator character after a restart', () => {
+    expect(restorePersistedCharacter('picard', 'ivo')).toBe('picard');
+  });
+
+  it('uses the built-in fallback only when no saved character exists', () => {
+    expect(restorePersistedCharacter(undefined, 'ivo')).toBe('ivo');
   });
 });
