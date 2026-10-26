@@ -2463,6 +2463,7 @@ ipcMain.handle('hire:openFile', async () => {
  */
 function createWindow(opts: { floor?: boolean } = {}): BrowserWindow {
   const isFloor = opts.floor === true;
+  const iconPath = appWindowIconPath();
 
   // Primary restores saved geometry; floors cascade off the focused window.
   let saved: WindowBounds | null = null;
@@ -2471,7 +2472,7 @@ function createWindow(opts: { floor?: boolean } = {}): BrowserWindow {
   const geom = cascade ?? saved;
 
   const win = new BrowserWindow({
-    icon: appWindowIconPath(),
+    icon: iconPath,
     width: geom?.width ?? DEFAULT_WIN.width,
     height: geom?.height ?? DEFAULT_WIN.height,
     ...(geom && geom.x !== undefined && geom.y !== undefined ? { x: geom.x, y: geom.y } : {}),
@@ -2559,7 +2560,15 @@ function createWindow(opts: { floor?: boolean } = {}): BrowserWindow {
   // Taskbar identity (Windows): tie the button to our AppUserModelID and .ico so
   // it cannot fall back to electron.exe's generic icon.
   if (process.platform === 'win32') {
-    try { win.setAppDetails({ appId: APP_USER_MODEL_ID, appIconPath: appWindowIconPath(), appIconIndex: 0 }); }
+    // BrowserWindow's string `icon` option is enough for packaged builds, but
+    // Electron's dev executable can retain electron.exe's icon until the native
+    // window icon is explicitly applied. Set the HICON before the window is
+    // shown, then bind the taskbar button to the same AUMID/icon pair.
+    try {
+      const icon = nativeImage.createFromPath(iconPath);
+      if (!icon.isEmpty()) win.setIcon(icon);
+      win.setAppDetails({ appId: APP_USER_MODEL_ID, appIconPath: iconPath, appIconIndex: 0 });
+    }
     catch (e) { console.warn('[icon] setAppDetails failed', e); }
   }
   win.once('ready-to-show', () => win.show());
