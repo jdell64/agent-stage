@@ -20,7 +20,8 @@ test('windows use the .ico on win32 and the same file ships as a resource', () =
   assert.match(main, /process\.platform === 'win32' \? 'agent-stage\.ico' : 'agent-stage\.png'/);
   assert.match(main, /icon: iconPath/);
   assert.match(main, /nativeImage\.createFromPath\(iconPath\)/);
-  assert.match(main, /win\.setIcon\(icon\)/);
+  assert.match(main, /win\.setIcon\(nativeWindowIcon\)/);
+  assert.match(main, /ready-to-show.*[\s\S]*nativeWindowIcon/);
   assert.match(main, /setAppDetails\(\{ appId: APP_USER_MODEL_ID, appIconPath: iconPath/);
   assert.match(builder, /from: build\/agent-stage\.ico\s+to: agent-stage\.ico/);
   assert.ok(existsSync(join(root, 'build', 'agent-stage.ico')));

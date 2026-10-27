@@ -2564,14 +2564,23 @@ function createWindow(opts: { floor?: boolean } = {}): BrowserWindow {
     // Electron's dev executable can retain electron.exe's icon until the native
     // window icon is explicitly applied. Set the HICON before the window is
     // shown, then bind the taskbar button to the same AUMID/icon pair.
+    let nativeWindowIcon: Electron.NativeImage | null = null;
     try {
-      const icon = nativeImage.createFromPath(iconPath);
-      if (!icon.isEmpty()) win.setIcon(icon);
+      nativeWindowIcon = nativeImage.createFromPath(iconPath);
+      if (!nativeWindowIcon.isEmpty()) win.setIcon(nativeWindowIcon);
       win.setAppDetails({ appId: APP_USER_MODEL_ID, appIconPath: iconPath, appIconIndex: 0 });
     }
     catch (e) { console.warn('[icon] setAppDetails failed', e); }
+    // Electron can recreate the native HWND while it finishes initializing a
+    // hidden window. Reapply the HICON after ready-to-show, when that HWND is
+    // final, so Windows cannot fall back to electron.exe's class icon.
+    win.once('ready-to-show', () => {
+      if (nativeWindowIcon && !nativeWindowIcon.isEmpty()) win.setIcon(nativeWindowIcon);
+      win.show();
+    });
+  } else {
+    win.once('ready-to-show', () => win.show());
   }
-  win.once('ready-to-show', () => win.show());
 
   // Never opens a window; hands the URL to the OS browser instead.
   //
