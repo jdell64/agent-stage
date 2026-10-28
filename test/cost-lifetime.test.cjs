@@ -143,7 +143,7 @@ test('truncation or rotation rebuilds from scratch instead of going negative', a
 
 test('malformed and empty lines are skipped, not fatal', async () => {
   const p = ledgerWith([row('a', 's1', 3)]);
-  fs.appendFileSync(p, '\nnot json at all\n');
+  fs.appendFileSync(p, '\nnot json at all\n{"agent_id":null}\n');
   fs.appendFileSync(p, `${row('a', 's1', 7)}\n`);
   const warnings = [];
   const originalWarn = console.warn;
