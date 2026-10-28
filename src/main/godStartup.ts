@@ -48,7 +48,12 @@ export function godSessionFactsFromTail(tail: string): GodSessionFacts {
     const line = lines[i].trim();
     if (!line.includes('"assistant"') || !line.includes('"usage"')) continue;
     let rec: Record<string, unknown>;
-    try { rec = JSON.parse(line) as Record<string, unknown>; } catch { continue; }
+    try { rec = JSON.parse(line) as Record<string, unknown>; } catch {
+      // Transcript rows can be torn while Claude is writing. Keep startup safe
+      // and avoid echoing transcript contents into logs.
+      console.warn('[god-startup] ignoring malformed transcript row');
+      continue;
+    }
     if (rec.type !== 'assistant' || rec.isSidechain === true || typeof rec.message !== 'object' || rec.message === null) continue;
     const msg = rec.message as Record<string, unknown>;
     const u = (typeof msg.usage === 'object' && msg.usage !== null ? msg.usage : null) as Record<string, unknown> | null;

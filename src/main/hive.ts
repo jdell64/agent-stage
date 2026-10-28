@@ -3366,7 +3366,11 @@ process.stdin.setEncoding('utf8');
 process.stdin.on('data', (d) => { data += d; });
 process.stdin.on('end', () => {
   let payload = {};
-  try { payload = JSON.parse(data || '{}'); } catch (_) {}
+  try { payload = JSON.parse(data || '{}'); } catch (_) {
+    // Hook stdin can be truncated during shutdown. Keep the safe empty payload
+    // and never echo potentially sensitive hook contents into logs.
+    console.warn('[cth-hook] ignoring malformed hook payload');
+  }
   if (!payload.agent_id) payload.agent_id = process.env.AGENT_ID || null;
   const sock = process.env.HIVE_SOCK;
   if (isStatus) {
