@@ -25,7 +25,7 @@ const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const loadTs = require('./load-ts.cjs');
 
-const { runHiddenClaude, readEnvelope, API_KEY_ENV } = loadTs('src/main/hiddenClaude.ts');
+const { runHiddenClaude, readEnvelope, API_KEY_ENV, quoteCmdToken, buildCmdArgs, parseCommandBinary } = loadTs('src/main/hiddenClaude.ts');
 
 const UUID = '11111111-1111-4111-8111-111111111111';
 /** The v1.1.46 silence boundary. Nothing may complete on it any more. */
@@ -147,14 +147,24 @@ test('THE REGRESSION: a newer decoy transcript plus output delivered after the o
 test('THE REGRESSION, second half: argv owns one session and the prompt goes on stdin', () => {
   const h = harness();
   runHiddenClaude('the whole prompt, including memory text', { model: 'claude-haiku-4-5', cwd: h.cwd, jsonSchema: { type: 'object' } }, h.deps);
-  const { args } = h.calls[0];
-  const flat = args.join(' ');
+  const rawArgs = h.calls[0].args;
+  const flat = rawArgs.join(' ');
+  const isCmdWrap = rawArgs[0] === '/d' && rawArgs[1] === '/s' && rawArgs[2] === '/c';
+  const args = isCmdWrap ? rawArgs.slice(3).join(' ') : rawArgs;
 
-  assert.equal(args.filter((a) => a === '--session-id').length, 1, 'exactly one session id');
-  assert.equal(args[args.indexOf('--session-id') + 1], UUID);
-  assert.ok(args.includes('--print'), 'print mode');
-  assert.equal(args[args.indexOf('--output-format') + 1], 'json');
-  assert.equal(args[args.indexOf('--json-schema') + 1], '{"type":"object"}');
+  if (Array.isArray(args)) {
+    assert.equal(args.filter((a) => a === '--session-id').length, 1, 'exactly one session id');
+    assert.equal(args[args.indexOf('--session-id') + 1], UUID);
+    assert.ok(args.includes('--print'), 'print mode');
+    assert.equal(args[args.indexOf('--output-format') + 1], 'json');
+    assert.equal(args[args.indexOf('--json-schema') + 1], '{"type":"object"}');
+  } else {
+    assert.ok(args.includes(`--session-id ${UUID}`));
+    assert.ok(args.includes('--print'));
+    assert.ok(args.includes('--output-format json'));
+    assert.ok(args.includes('--json-schema'));
+    assert.ok(args.includes('type') && args.includes('object'));
+  }
   // The prompt must never be visible in argv (Windows length limit; argv is world-readable).
   assert.ok(!flat.includes('the whole prompt'), 'the prompt must not reach argv');
   assert.equal(h.child.stdin.written, 'the whole prompt, including memory text');
@@ -339,6 +349,73 @@ test('the REAL Windows .cmd shim path: schema and prompt survive the cmd.exe wra
     assert.equal(echoed.stdin, prompt, 'the whole prompt arrived on stdin, newlines and all');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('parseCommandBinary: extracts binary from bare names, quoted strings, and full paths', () => {
+  assert.equal(parseCommandBinary(undefined), 'claude');
+  assert.equal(parseCommandBinary(''), 'claude');
+  assert.equal(parseCommandBinary('   '), 'claude');
+  assert.equal(parseCommandBinary('claude'), 'claude');
+  assert.equal(parseCommandBinary('claude --model haiku'), 'claude');
+  assert.equal(parseCommandBinary('"C:\\Program Files\\nodejs\\claude.cmd" --print'), 'C:\\Program Files\\nodejs\\claude.cmd');
+  assert.equal(parseCommandBinary('\'C:\\Program Files\\nodejs\\claude.cmd\' --print'), 'C:\\Program Files\\nodejs\\claude.cmd');
+});
+
+test('buildCmdArgs: correctly wraps exe path with spaces and arguments with quotes/spaces', () => {
+  const exe = 'C:\\Program Files\\nodejs\\claude.cmd';
+  const args = ['--print', '--model', 'claude-haiku-4-5', '--json-schema', '{"type":"object"}', '--add-dir', 'C:\\My Projects\\Dir'];
+  const cmdArgs = buildCmdArgs(exe, args);
+  assert.equal(cmdArgs.length, 4);
+  assert.equal(cmdArgs[0], '/d');
+  assert.equal(cmdArgs[1], '/s');
+  assert.equal(cmdArgs[2], '/c');
+  assert.equal(
+    cmdArgs[3],
+    '""C:\\Program Files\\nodejs\\claude.cmd" --print --model claude-haiku-4-5 --json-schema "{\\"type\\":\\"object\\"}" --add-dir "C:\\My Projects\\Dir""'
+  );
+});
+
+test('the REAL Windows .cmd shim path with spaces in path: schema and prompt survive cmd.exe wrapper', { skip: process.platform === 'win32' ? false : 'the .cmd shim wrapper is a win32 path' }, async () => {
+  // Reproduces the root cause of the 447 condense-abort events: when the configured
+  // or resolved command has spaces in its directory path (e.g. `C:\Program Files\nodejs\claude.cmd`),
+  // wrapping it as `cmd.exe /d /s /c <exe> ...args` caused cmd.exe to strip quotes and fail
+  // with "'C:\Program' is not recognized as an internal or external command".
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude shim spaces '));
+  const dir = path.join(baseDir, 'Program Files', 'nodejs');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'shim.js'), [
+    "const chunks = [];",
+    "process.stdin.on('data', (c) => chunks.push(c));",
+    "process.stdin.on('end', () => {",
+    "  const argv = process.argv.slice(2);",
+    "  const at = (f) => { const i = argv.indexOf(f); return i < 0 ? null : argv[i + 1]; };",
+    "  process.stdout.write(JSON.stringify({",
+    "    type: 'result', is_error: false, session_id: at('--session-id'),",
+    "    structured_output: { condensed: 'from the spaced shim', hoist: [] },",
+    "    result: JSON.stringify({ argv, stdin: Buffer.concat(chunks).toString('utf8') })",
+    "  }));",
+    "});"
+  ].join('\n'));
+  const cmd = path.join(dir, 'claude.cmd');
+  fs.writeFileSync(cmd, ['@echo off', 'node "%~dp0shim.js" %*', ''].join('\r\n'));
+
+  try {
+    const schema = { type: 'object', additionalProperties: false, required: ['condensed', 'hoist'] };
+    const prompt = 'line one\nline two with "quotes" & an ampersand';
+    const r = await runHiddenClaude(prompt, {
+      model: 'claude-haiku-4-5', cwd: dir, command: cmd, jsonSchema: schema, timeoutMs: 60_000
+    });
+    assert.equal(r.ok, true, r.error);
+    assert.deepEqual(r.structuredOutput, { condensed: 'from the spaced shim', hoist: [] });
+    const echoed = JSON.parse(r.result);
+    const at = (f) => echoed.argv[echoed.argv.indexOf(f) + 1];
+    assert.deepEqual(JSON.parse(at('--json-schema')), schema, 'the schema arrived through cmd.exe byte-intact');
+    assert.equal(at('--session-id'), r.sessionId, 'and the child was told the session we generated');
+    assert.ok(echoed.argv.includes('--print'));
+    assert.equal(echoed.stdin, prompt, 'the whole prompt arrived on stdin, newlines and all');
+  } finally {
+    fs.rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
