@@ -119,6 +119,39 @@ test('ensureHive writes an executable bundled-node launcher', async (t) => {
   if (POSIX) assert.ok(fs.statSync(launcher).mode & 0o111, 'must be executable');
 });
 
+test('cth hook treats malformed stdin as an empty payload and warns without echoing it', async (t) => {
+  const base = tmpHome('md-hive-malformed-hook-');
+  const home = path.join(base, 'user');
+  fs.mkdirSync(home, { recursive: true });
+  const realHome = process.env.HOME;
+  const realProfile = process.env.USERPROFILE;
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  t.after(() => {
+    if (realHome === undefined) delete process.env.HOME; else process.env.HOME = realHome;
+    if (realProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = realProfile;
+    try { fs.rmSync(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 }); } catch { /* best effort on Windows */ }
+  });
+  const hive = new HiveManager(() => home);
+  await hive.ensureAgent({ id: 'a1', name: 'A', provider: 'claude', cwd: home });
+
+  const shim = path.join(home, 'hive', 'bin', 'cth-hook.cjs');
+  const secret = 'hook-secret-that-must-not-be-logged';
+  const env = { ...process.env };
+  delete env.HIVE_SOCK;
+  const result = await new Promise((resolve) => {
+    const child = spawn(process.execPath, [shim], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.stdin.end(`{"hook_event_name":"Stop","secret":${secret}`);
+    child.on('close', (code) => resolve({ code, stderr }));
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stderr, /\[cth-hook\] ignoring malformed hook payload/);
+  assert.equal(result.stderr.includes(secret), false);
+});
+
 test('the claude hook + statusLine commands run through the launcher', async (t) => {
   const home = tmpHome();
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

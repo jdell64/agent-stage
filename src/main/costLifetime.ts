@@ -188,7 +188,12 @@ export class CostLedgerTotals {
 
   private foldLine(line: string): void {
     let row: { agent_id?: string; session_id?: string; usd?: number };
-    try { row = JSON.parse(line); } catch { return; } // half-written tail line
+    try { row = JSON.parse(line); } catch {
+      // A torn or corrupt JSONL row must never take down the ledger reader.
+      // Do not include the row: ledger lines may contain session metadata.
+      console.warn('[cost-lifetime] ignoring malformed JSONL row');
+      return;
+    }
     if (!row || typeof row.agent_id !== 'string') return;
     const usd = typeof row.usd === 'number' && Number.isFinite(row.usd) ? row.usd : 0;
 

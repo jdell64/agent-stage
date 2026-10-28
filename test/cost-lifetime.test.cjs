@@ -143,11 +143,15 @@ test('truncation or rotation rebuilds from scratch instead of going negative', a
 
 test('malformed and empty lines are skipped, not fatal', async () => {
   const p = ledgerWith([row('a', 's1', 3)]);
-  fs.appendFileSync(p, '\nnot json at all\n{"agent_id":null}\n');
+  fs.appendFileSync(p, '\nnot json at all\n');
   fs.appendFileSync(p, `${row('a', 's1', 7)}\n`);
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
   const t = new CostLedgerTotals();
-  await t.refreshFully(p);
+  try { await t.refreshFully(p); } finally { console.warn = originalWarn; }
   assert.equal(t.usdFor('a'), 7);
+  assert.deepEqual(warnings, ['[cost-lifetime] ignoring malformed JSONL row']);
 });
 
 test('a missing ledger leaves the last good totals in place', async () => {
