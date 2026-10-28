@@ -111,6 +111,52 @@ interface ClaudeEnvelope {
   subtype?: unknown;
 }
 
+/**
+ * Escape and quote a single token for cmd.exe.
+ * Quotes embedded double-quotes as `\"` and wraps the token in double-quotes if it
+ * is empty or contains whitespace, quotes, or cmd.exe metacharacters (& | ^ < > ( ) % !).
+ */
+export function quoteCmdToken(s: string): string {
+  const escaped = s.replace(/"/g, '\\"');
+  return (!s || /[ \t"&|^<>()%!]/.test(s)) ? `"${escaped}"` : escaped;
+}
+
+/**
+ * Build the arguments array for spawning a non-.exe command through `cmd.exe /d /s /c "<command>"`.
+ * Wraps the entire inner command in an outer pair of double-quotes so cmd.exe's `/s`
+ * strips exactly that outer pair, preserving quotes around the executable (e.g. `C:\Program Files\...`)
+ * and all argument tokens intact. Used with `windowsVerbatimArguments: true`.
+ */
+export function buildCmdArgs(exe: string, args: string[]): string[] {
+  const inner = [exe, ...args].map(quoteCmdToken).join(' ');
+  return ['/d', '/s', '/c', `"${inner}"`];
+}
+
+/**
+ * Extract the executable binary name or path from an opts.command string.
+ * Supports quoted paths (e.g. `"C:\Program Files\...\claude.cmd" --flags`),
+ * full paths with spaces that exist on disk, or standard whitespace-split command lines.
+ */
+export function parseCommandBinary(command?: string): string {
+  if (!command) return 'claude';
+  const trimmed = command.trim();
+  if (!trimmed) return 'claude';
+
+  if (trimmed.startsWith('"') || trimmed.startsWith("'")) {
+    const quote = trimmed[0];
+    const endQuote = trimmed.indexOf(quote, 1);
+    if (endQuote > 1) {
+      return trimmed.slice(1, endQuote);
+    }
+  }
+
+  if (existsSync(trimmed)) {
+    return trimmed;
+  }
+
+  return trimmed.split(/\s+/)[0] || 'claude';
+}
+
 export function runHiddenClaude(
   prompt: string,
   opts: HiddenClaudeOptions,
@@ -126,7 +172,7 @@ export function runHiddenClaude(
     }
 
     const sessionId = deps.randomUUID();
-    const binary = (opts.command || 'claude').trim().split(/\s+/)[0] || 'claude';
+    const binary = parseCommandBinary(opts.command);
     const exe = resolveCommand(binary);
     const disallowed = opts.disallowedTools ?? ['Edit', 'Write', 'NotebookEdit'];
     const addDirs = (opts.addDirs ?? []).filter((d) => d && existsSync(d));
@@ -158,7 +204,7 @@ export function runHiddenClaude(
     // launches directly. (#22)
     const winWrap = process.platform === 'win32' && !/\.(exe|com)$/i.test(exe);
     const spawnFile = winWrap ? (process.env.ComSpec || 'cmd.exe') : exe;
-    const spawnArgs = winWrap ? ['/d', '/s', '/c', exe, ...args] : args;
+    const spawnArgs = winWrap ? buildCmdArgs(exe, args) : args;
 
     let child: ChildProcess;
     try {
@@ -167,6 +213,7 @@ export function runHiddenClaude(
         env,
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],
+        ...(winWrap ? { windowsVerbatimArguments: true } : {}),
       });
     } catch (e) {
       resolve({ ok: false, sessionId, error: e instanceof Error ? e.message : String(e) });
