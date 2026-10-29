@@ -56,9 +56,8 @@ export class ThoughtBubble {
   // Extra upward shift (px) applied on top of OFFSET_Y so two nearby bubbles can
   // stack instead of overlapping. Set each frame by the scene's overlap pass.
   private extraLift = 0;
-  // Current camera zoom. The bubble lives inside the zoomed world container, so
-  // The bubble lives inside the camera-scaled world. Counter-scale at every
-  // zoom so fit-to-screen and focus zoom cannot make it huge or blur it.
+  // Current camera zoom. The bubble lives inside the camera-scaled world, so
+  // counter-scale at every zoom to keep its screen size stable and its text crisp.
   private zoom = 1;
   // World bounds (map size in px). An avatar near the map edge — the orchestrator's CEO
   // room sits in the top-left corner — would otherwise push its cloud out of
