@@ -1736,8 +1736,8 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
       const onTick = (ticker: Ticker) => {
         const dt = ticker.deltaMS / 1000;
         camera.update(dt);
-        // Thought clouds counter-scale against the camera so their text never
-        // renders below 1:1 screen size when the window/world shrinks.
+        // Thought clouds counter-scale against camera zoom to retain their
+        // intended screen size during fit-to-screen and focused views.
         const zoom = world.scale.x;
         for (const rt of runtimes.values()) {
           rt.character.setBubbleZoom(zoom);

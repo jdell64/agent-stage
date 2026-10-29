@@ -1,6 +1,7 @@
 import { Container, Graphics, Text } from 'pixi.js';
 import { colors } from '@/design/tokens';
 import { toolIcon } from './ToolBubble';
+import { bubbleCounterScale } from './bubbleScale';
 
 // A comic "thought cloud" pinned above an avatar's head showing what it's doing
 // RIGHT NOW (the agent's live `action`, e.g. "edit App.tsx" / "bash npm test").
@@ -55,11 +56,8 @@ export class ThoughtBubble {
   // Extra upward shift (px) applied on top of OFFSET_Y so two nearby bubbles can
   // stack instead of overlapping. Set each frame by the scene's overlap pass.
   private extraLift = 0;
-  // Current camera zoom. The bubble lives inside the zoomed world container, so
-  // when the window shrinks (fit-to-screen zoom < 1) the text used to scale
-  // down with the map and turn into ragged mush. Counter-scale so the bubble
-  // never renders below its designed 1:1 screen size; at zoom ≥ 1 it keeps
-  // scaling with the world as before.
+  // Current camera zoom. The bubble lives inside the camera-scaled world, so
+  // counter-scale at every zoom to keep its screen size stable and its text crisp.
   private zoom = 1;
   // World bounds (map size in px). An avatar near the map edge — the orchestrator's CEO
   // room sits in the top-left corner — would otherwise push its cloud out of
@@ -141,17 +139,11 @@ export class ThoughtBubble {
     this.lingerElapsed = 0;
   }
 
-  /** Update for the camera zoom: keep the bubble's SCREEN size from dropping
-   *  below 1:1 by counter-scaling while the world is zoomed out. */
+  /** Keep the bubble's screen size stable as the camera zoom changes. */
   setZoom(z: number): void {
-    if (!(z > 0) || z === this.zoom) return;
+    if (!(z > 0) || !Number.isFinite(z) || z === this.zoom) return;
     this.zoom = z;
-    this.container.scale.set(this.compensation());
-  }
-
-  /** World-units multiplier that cancels a < 1 camera zoom (1 at zoom ≥ 1). */
-  private compensation(): number {
-    return 1 / Math.min(this.zoom, 1);
+    this.container.scale.set(bubbleCounterScale(z));
   }
 
   /** The world rect the bubble must stay inside (the map size, in px). */
@@ -161,7 +153,7 @@ export class ThoughtBubble {
   }
 
   setPosition(px: number, py: number): void {
-    const comp = this.compensation();
+    const comp = bubbleCounterScale(this.zoom);
     const w = this.bgW * RENDER_SCALE * comp;
     const h = this.bgH * RENDER_SCALE * comp;
     let x = px - w / 2;
@@ -186,7 +178,7 @@ export class ThoughtBubble {
    *  null when hidden. Used by the scene to detect and resolve overlaps. */
   getLayout(px: number, py: number): { x: number; y: number; w: number; h: number } | null {
     if (this.state === 'hidden') return null;
-    const comp = this.compensation();
+    const comp = bubbleCounterScale(this.zoom);
     const w = this.bgW * RENDER_SCALE * comp;
     const h = this.bgH * RENDER_SCALE * comp;
     let x = px - w / 2;
