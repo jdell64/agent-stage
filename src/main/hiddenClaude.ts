@@ -111,14 +111,36 @@ interface ClaudeEnvelope {
   subtype?: unknown;
 }
 
+/** cmd.exe metacharacters, including syntax which is harmless to the first parser
+ * but becomes active when a .cmd shim expands `%*` and parses the arguments again. */
+const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
+
 /**
- * Escape and quote a single token for cmd.exe.
- * Quotes embedded double-quotes as `\"` and wraps the token in double-quotes if it
- * is empty or contains whitespace, quotes, or cmd.exe metacharacters (& | ^ < > ( ) % !).
+ * Escape and quote one token for `cmd.exe /d /s /c`.
+ *
+ * This follows cross-spawn's cmd quoting algorithm: double backslashes before a
+ * literal quote or the closing quote, then caret-escape cmd syntax. Arguments
+ * forwarded through an npm `.cmd` shim are escaped twice because the shim's `%*`
+ * expansion causes a second cmd parse. `cmd.exe` treats CR/LF as command
+ * separators before argument quoting, so rejecting them is safer than silently
+ * truncating the value or executing its suffix as a command.
  */
-export function quoteCmdToken(s: string): string {
-  const escaped = s.replace(/"/g, '\\"');
-  return (!s || /[ \t"&|^<>()%!]/.test(s)) ? `"${escaped}"` : escaped;
+export function quoteCmdToken(s: string, doubleEscapeMetaChars = true): string {
+  if (/[\r\n]/.test(s)) {
+    throw new Error('cmd.exe cannot safely carry a newline in an argument');
+  }
+
+  // Backslashes before a quote must be doubled for the final CRT parser; trailing
+  // backslashes must also be doubled because the closing quote follows them.
+  let arg = s.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"');
+  arg = arg.replace(/(?=(\\+?)?)\1$/g, '$1$1');
+  arg = `"${arg}"`;
+
+  // One pass gets through cmd.exe. A .cmd shim reparses `%*`, requiring a second
+  // pass for the values that follow it. The executable token is only parsed once.
+  arg = arg.replace(CMD_META, '^$1');
+  if (doubleEscapeMetaChars) arg = arg.replace(CMD_META, '^$1');
+  return arg;
 }
 
 /**
@@ -128,7 +150,7 @@ export function quoteCmdToken(s: string): string {
  * and all argument tokens intact. Used with `windowsVerbatimArguments: true`.
  */
 export function buildCmdArgs(exe: string, args: string[]): string[] {
-  const inner = [exe, ...args].map(quoteCmdToken).join(' ');
+  const inner = [quoteCmdToken(exe, false), ...args.map((arg) => quoteCmdToken(arg, true))].join(' ');
   return ['/d', '/s', '/c', `"${inner}"`];
 }
 
@@ -204,7 +226,13 @@ export function runHiddenClaude(
     // launches directly. (#22)
     const winWrap = process.platform === 'win32' && !/\.(exe|com)$/i.test(exe);
     const spawnFile = winWrap ? (process.env.ComSpec || 'cmd.exe') : exe;
-    const spawnArgs = winWrap ? buildCmdArgs(exe, args) : args;
+    let spawnArgs: string[];
+    try {
+      spawnArgs = winWrap ? buildCmdArgs(exe, args) : args;
+    } catch (e) {
+      resolve({ ok: false, sessionId, error: e instanceof Error ? e.message : String(e) });
+      return;
+    }
 
     let child: ChildProcess;
     try {

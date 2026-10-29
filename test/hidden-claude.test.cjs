@@ -159,9 +159,10 @@ test('THE REGRESSION, second half: argv owns one session and the prompt goes on 
     assert.equal(args[args.indexOf('--output-format') + 1], 'json');
     assert.equal(args[args.indexOf('--json-schema') + 1], '{"type":"object"}');
   } else {
-    assert.ok(args.includes(`--session-id ${UUID}`));
+    assert.ok(args.includes(UUID), 'session id survives cmd.exe quoting');
+    assert.ok(args.includes('--session-id'), 'session id flag survives cmd.exe quoting');
     assert.ok(args.includes('--print'));
-    assert.ok(args.includes('--output-format json'));
+    assert.ok(args.includes('--output-format') && args.includes('json'), 'output format survives cmd.exe quoting');
     assert.ok(args.includes('--json-schema'));
     assert.ok(args.includes('type') && args.includes('object'));
   }
@@ -372,8 +373,32 @@ test('buildCmdArgs: correctly wraps exe path with spaces and arguments with quot
   assert.equal(cmdArgs[2], '/c');
   assert.equal(
     cmdArgs[3],
-    '""C:\\Program Files\\nodejs\\claude.cmd" --print --model claude-haiku-4-5 --json-schema "{\\"type\\":\\"object\\"}" --add-dir "C:\\My Projects\\Dir""'
+    '"^"C:\\Program^ Files\\nodejs\\claude.cmd^" ^^^"--print^^^" ^^^"--model^^^" ^^^"claude-haiku-4-5^^^" ^^^"--json-schema^^^" ^^^"{\\^^^"type\\^^^":\\^^^"object\\^^^"}^^^" ^^^"--add-dir^^^" ^^^"C:\\My^^^ Projects\\Dir^^^""'
   );
+});
+
+test('quoteCmdToken rejects CR/LF instead of allowing cmd.exe to truncate or chain commands', () => {
+  assert.throws(() => quoteCmdToken('line one\nline two'), /cannot safely carry a newline/);
+  assert.throws(() => quoteCmdToken('line one\rline two'), /cannot safely carry a newline/);
+  assert.throws(() => buildCmdArgs('claude.cmd', ['--model', 'line one\nline two']), /cannot safely carry a newline/);
+});
+
+test('the REAL Windows .cmd shim preserves cmd metacharacters, quotes, percent text, and trailing backslashes', { skip: process.platform === 'win32' ? false : 'the .cmd shim wrapper is a win32 path' }, async () => {
+  const { dir, cmd } = cmdShim();
+  const values = [
+    'a&b', 'a|b', 'a<b', 'a>b', 'a^b', 'a%VAR%b', 'a!b', 'a(b)', 'a"b', 'C:\\trailing\\'
+  ];
+  try {
+    for (const model of values) {
+      const r = await runHiddenClaude('x', { model, cwd: dir, command: cmd, timeoutMs: 60_000 });
+      assert.equal(r.ok, true, `${JSON.stringify(model)}: ${r.error}`);
+      const echoed = JSON.parse(r.result);
+      const at = (f) => echoed.argv[echoed.argv.indexOf(f) + 1];
+      assert.equal(at('--model'), model, `model was changed by cmd.exe for ${JSON.stringify(model)}`);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('the REAL Windows .cmd shim path with spaces in path: schema and prompt survive cmd.exe wrapper', { skip: process.platform === 'win32' ? false : 'the .cmd shim wrapper is a win32 path' }, async () => {
