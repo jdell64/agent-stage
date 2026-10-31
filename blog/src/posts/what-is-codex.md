@@ -59,7 +59,7 @@ Codex Cloud runs a task in its own workspace on OpenAI's machines. OpenAI's [clo
 
 ## What is Codex used for?
 
-Codex is used for the jobs you would hand a colleague with repo access: fixing a bug, building a feature, explaining an unfamiliar codebase or reviewing a pull request. The API key option, in the pricing page's words, is "great for automation in shared environments like CI." Codex Cloud suits work that outlasts your attention span.
+Codex is used for the jobs you would hand a colleague with repo access: fixing a bug, building a feature, explaining an unfamiliar codebase or reviewing a pull request. The API key option, in the pricing page's words, is "great for automation in shared environments like CI." Codex Cloud suits work that outlasts your attention span. To test apps that have no command line, the desktop app adds [computer use](/blog/codex-computer-use/).
 
 ## Is Codex free?
 
@@ -84,4 +84,4 @@ No: ChatGPT is OpenAI's assistant, and Codex is the coding agent that ships with
 
 ## How does Codex compare with Claude Code?
 
-Codex and Claude Code do the same job; our view is that the plan you already pay for usually decides. Codex's CLI is open source under Apache-2.0 and the Free plan lists Codex in the desktop app. Claude Code is Anthropic's agent and, per Anthropic's [memory docs](https://code.claude.com/docs/en/memory), reads `CLAUDE.md` files and can read `AGENTS.md` too. We think neither wins for every repo. Our [Codex vs Claude Code comparison](/blog/codex-cli-vs-claude-code/) has a dated table, and [Codex vs Cursor](/blog/codex-vs-cursor/) covers the editor side.
+Codex and Claude Code do the same job; our view is that the plan you already pay for usually decides. Codex's CLI is open source under Apache-2.0 and the Free plan lists Codex in the desktop app. Claude Code is Anthropic's agent and, per Anthropic's [memory docs](https://code.claude.com/docs/en/memory), reads `CLAUDE.md` files and can read `AGENTS.md` too. We think neither wins for every repo. Our [Codex vs Claude Code comparison](/blog/codex-cli-vs-claude-code/) has a dated table, and [Codex vs Cursor](/blog/codex-vs-cursor/) covers the editor side. For seven other agents, see [Codex alternatives](/blog/codex-alternatives/).
