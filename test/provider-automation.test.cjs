@@ -5,9 +5,11 @@ const assert = require('node:assert/strict');
 const loadTs = require('./load-ts.cjs');
 
 const {
+  buildRemoteControlSessionName,
   clearCommandForProvider,
   compactionCommandForProvider,
   contextCommandsForProvider,
+  formatLaunchTimestamp,
   isCompactionCommand,
   remoteControlCommandForProvider,
   terminalReadySettleMs,
@@ -119,11 +121,17 @@ test('every provider preset has a considered context-command entry', () => {
   }
 });
 
-test('Claude alone receives a remote-control slash command', () => {
-  assert.equal(remoteControlCommandForProvider('claude', 'the orchestrator'), '/remote-control the orchestrator');
-  assert.equal(remoteControlCommandForProvider('codex', 'Jim'), null);
-  assert.equal(remoteControlCommandForProvider('grok', 'Grok'), null);
-  assert.equal(remoteControlCommandForProvider('kimi', 'Pam'), null);
+test('Claude alone receives a remote-control slash command with distinguishable session name', () => {
+  const fixedDate = new Date(2026, 9, 31, 11, 20); // 10-31 11:20
+  assert.equal(formatLaunchTimestamp(fixedDate), '10-31-1120');
+  assert.equal(buildRemoteControlSessionName('Picard', fixedDate), 'Picard-10-31-1120');
+  assert.equal(buildRemoteControlSessionName('the orchestrator', fixedDate), 'the-orchestrator-10-31-1120');
+  assert.equal(remoteControlCommandForProvider('claude', 'the orchestrator', fixedDate), '/remote-control the-orchestrator-10-31-1120');
+  assert.equal(remoteControlCommandForProvider('claude', 'Picard', fixedDate), '/remote-control Picard-10-31-1120');
+  assert.equal(remoteControlCommandForProvider('claude', '', fixedDate), '/remote-control');
+  assert.equal(remoteControlCommandForProvider('codex', 'Jim', fixedDate), null);
+  assert.equal(remoteControlCommandForProvider('grok', 'Grok', fixedDate), null);
+  assert.equal(remoteControlCommandForProvider('kimi', 'Pam', fixedDate), null);
 });
 
 test('provider readiness policies allow each TUI to settle', () => {

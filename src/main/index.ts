@@ -73,6 +73,7 @@ import { ControlRegistry } from './control';
 import { WorkerWakeWatchdog, WORKER_WAKE_REPORT_MS, activityEvidenceAt, type WorkerWakeFacts } from './workerWake';
 import { inboxNudgeText } from '../shared/hiveNudge';
 import { resolveOrchestratorName, setThemeOrchestratorName, getThemeOrchestratorName } from '../shared/orchestratorIdentity';
+import { buildRemoteControlSessionName } from '../shared/providerAutomation';
 import { fetchHireManifest, readHireManifestFiles } from './hire';
 import { parseHireDeepLink, type HireManifest } from '../shared/hire';
 import { ClosingTimeController } from './closingTime';
@@ -3054,10 +3055,11 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     // prefix to the machine hostname (e.g. "vyapaks-macbook-pro-…"), which is
     // opaque when several agents run at once — especially with remoteControlAtStartup
     // on, where RC auto-enables for every session. Slugify the friendly name into a
-    // single safe token; Claude still appends its own random suffix for uniqueness.
+    // single safe token with local launch timestamp so sessions are distinguishable;
+    // Claude still appends its own random suffix for uniqueness.
     if (!args.includes('--remote-control-session-name-prefix')) {
-      const label = (opts.hive.name || opts.hive.id || '')
-        .trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+      const baseLabel = opts.hive.name || opts.hive.id || '';
+      const label = buildRemoteControlSessionName(baseLabel);
       if (label) args.push('--remote-control-session-name-prefix', label);
     }
     // Coarse runaway cap.
