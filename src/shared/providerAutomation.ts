@@ -239,17 +239,19 @@ export function buildRemoteControlSessionName(baseName?: string, now: Date = new
 }
 
 /** Claude exposes remote control as a slash command; Codex uses its daemon and
- * Kimi has no equivalent slash command. */
+ * Kimi has no equivalent slash command.
+ *
+ * `sessionName` is the exact name to pass (e.g. captured launch session name).
+ * If a sessionName is provided, `/remote-control <sessionName>` is emitted.
+ */
 export function remoteControlCommandForProvider(
   provider: AgentProvider,
-  sessionName?: string,
-  now: Date = new Date()
+  sessionName?: string
 ): string | null {
   if (provider !== 'claude') return null;
   const name = sessionName?.trim();
   if (!name) return '/remote-control';
-  const suffixed = buildRemoteControlSessionName(name, now);
-  return `/remote-control ${suffixed}`;
+  return `/remote-control ${name}`;
 }
 
 /** Initial TUI output needs a short provider-specific settle before typing. */

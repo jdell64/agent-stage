@@ -2771,7 +2771,7 @@ function findCodexHomeForSession(sessionId: string, siblingsRoot: string): strin
 
 /** Spawn options shared by the `pty:spawn` IPC handler and the orchestrator-triggered
  *  ephemeral-worker watcher. */
-type AgentSpawnOptions = SpawnOptions & { hive?: AgentMeta; isolate?: boolean; resume?: boolean; requireResume?: boolean; resumeSessionId?: string; provider?: AgentProvider; noAutoInstall?: boolean };
+type AgentSpawnOptions = SpawnOptions & { hive?: AgentMeta; isolate?: boolean; resume?: boolean; requireResume?: boolean; resumeSessionId?: string; provider?: AgentProvider; noAutoInstall?: boolean; remoteControlSessionName?: string };
 
 /** Map a `ptyManager.spawn` failure string to the closed `agent_spawn_failed.reason`
  *  enum (analytics.ts). The two known strings come from PtyManager.spawn; anything
@@ -2799,7 +2799,7 @@ ipcMain.handle('pty:spawn', async (evt, opts: AgentSpawnOptions) => {
  *  it can ALSO be invoked by the orchestrator-triggered ephemeral-worker watcher (which has
  *  no renderer `evt`). `owner` is the window that should receive this PTY's output
  *  (null → the primary window). Behavior-identical to the prior inline handler. */
-async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebContents | null): Promise<{ ok: boolean; error?: string; cwd?: string; worktreePath?: string; resumeNotFound?: boolean; resumed?: boolean; seedPrompt?: string }> {
+async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebContents | null): Promise<{ ok: boolean; error?: string; cwd?: string; worktreePath?: string; resumeNotFound?: boolean; resumed?: boolean; seedPrompt?: string; remoteControlSessionName?: string }> {
   // ── cwd INGESTION — expand `~` exactly once, here ───────────────────────────
   // This is the single door every agent spawn comes through (`pty:spawn` IPC and
   // the orchestrator-triggered ephemeral-worker watcher), so it is where a user-typed
@@ -3024,6 +3024,9 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // Set when `--resume` was actually attached (explicit id or restore-on-restart),
   // so the renderer can skip re-orienting a orchestrator/assistant that resumed its thread.
   let didResume = false;
+  // Remember if Claude had a remote control session name generated or supplied
+  // so we can hand it back to the caller for slash-command parity and retries.
+  let resolvedRcSessionName: string | undefined;
   // Claude-only — these are Claude Code flags; other CLIs carry their own flags
   // in the command string the renderer already built.
   if (opts.hive && claudeProvider) {
@@ -3058,9 +3061,16 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     // single safe token with local launch timestamp so sessions are distinguishable;
     // Claude still appends its own random suffix for uniqueness.
     if (!args.includes('--remote-control-session-name-prefix')) {
+      const explicitLabel = typeof opts.remoteControlSessionName === 'string' ? opts.remoteControlSessionName.trim() : '';
       const baseLabel = opts.hive.name || opts.hive.id || '';
-      const label = buildRemoteControlSessionName(baseLabel);
-      if (label) args.push('--remote-control-session-name-prefix', label);
+      const label = explicitLabel || buildRemoteControlSessionName(baseLabel);
+      if (label) {
+        args.push('--remote-control-session-name-prefix', label);
+        resolvedRcSessionName = label;
+      }
+    } else {
+      const idx = args.indexOf('--remote-control-session-name-prefix');
+      resolvedRcSessionName = args[idx + 1];
     }
     // Coarse runaway cap.
     if (typeof cfg.maxTurns === 'number' && cfg.maxTurns > 0 && !args.includes('--max-turns')) {
@@ -3258,7 +3268,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   const worktreePath = worktreePaths.get(opts.id);
   // `cwd` echoes back the TILDE-EXPANDED absolute path so the renderer's agent
   // record matches what the registry and the PTY actually used.
-  return { ...res, cwd: opts.cwd, ...(worktreePath ? { worktreePath } : {}), ...(resumeNotFound ? { resumeNotFound: true } : {}), ...(didResume ? { resumed: true } : {}), ...(seedPrompt ? { seedPrompt } : {}) };
+  return { ...res, cwd: opts.cwd, ...(worktreePath ? { worktreePath } : {}), ...(resumeNotFound ? { resumeNotFound: true } : {}), ...(didResume ? { resumed: true } : {}), ...(seedPrompt ? { seedPrompt } : {}), ...(resolvedRcSessionName ? { remoteControlSessionName: resolvedRcSessionName } : {}) };
 }
 ipcMain.handle('pty:write', (_evt, id: string, data: string) => {
   if (typeof id !== 'string' || typeof data !== 'string') return { ok: false, error: 'invalid args' };

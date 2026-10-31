@@ -231,6 +231,10 @@ export interface SpawnPtyOptions {
    *  main process seeds that session's `.jsonl` into the target cwd's project dir
    *  (copying it from wherever it lives) and launches `claude --resume <id>`. */
   resumeSessionId?: string;
+  /** Captured session name/timestamp for remote control (e.g. Picard-10-31-1120).
+   *  Passed explicitly so the CLI flag (--remote-control-session-name-prefix) and
+   *  slash command (/remote-control <name>) share the exact same captured name. */
+  remoteControlSessionName?: string;
 }
 
 export interface PtyExit { exitCode: number; signal?: number | undefined }
@@ -589,7 +593,7 @@ const api = {
   // ─── PTY ─────────────────────────────────────────────────────────────────
   /** `cwd` in the result is the TILDE-EXPANDED absolute path main actually spawned
    *  into — the renderer stores that, not the raw `~/…` the user typed. */
-  spawnPty: (opts: SpawnPtyOptions): Promise<{ ok: boolean; error?: string; cwd?: string; worktreePath?: string; resumeNotFound?: boolean; resumed?: boolean; seedPrompt?: string }> =>
+  spawnPty: (opts: SpawnPtyOptions): Promise<{ ok: boolean; error?: string; cwd?: string; worktreePath?: string; resumeNotFound?: boolean; resumed?: boolean; seedPrompt?: string; remoteControlSessionName?: string }> =>
     ipcRenderer.invoke('pty:spawn', opts),
   writePty: (id: string, data: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('pty:write', id, data),
