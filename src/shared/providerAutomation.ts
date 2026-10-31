@@ -214,15 +214,44 @@ export function clearCommandForProvider(
   return contextCommandsForProvider(provider).clear;
 }
 
+/** Format a readable local-time launch timestamp (e.g. 10-31-1120 for Oct 31, 11:20). */
+export function formatLaunchTimestamp(now: Date = new Date()): string {
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  const month = pad(now.getMonth() + 1);
+  const day = pad(now.getDate());
+  const hours = pad(now.getHours());
+  const minutes = pad(now.getMinutes());
+  return `${month}-${day}-${hours}${minutes}`;
+}
+
+/**
+ * Build a distinguishable Remote Control session name by appending the local launch
+ * timestamp (e.g. Picard-10-31-1120). Single token with no spaces.
+ */
+export function buildRemoteControlSessionName(baseName?: string, now: Date = new Date()): string {
+  const label = (baseName || '')
+    .trim()
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  const ts = formatLaunchTimestamp(now);
+  if (!label) return ts;
+  return `${label}-${ts}`;
+}
+
 /** Claude exposes remote control as a slash command; Codex uses its daemon and
- * Kimi has no equivalent slash command. */
+ * Kimi has no equivalent slash command.
+ *
+ * `sessionName` is the exact name to pass (e.g. captured launch session name).
+ * If a sessionName is provided, `/remote-control <sessionName>` is emitted.
+ */
 export function remoteControlCommandForProvider(
   provider: AgentProvider,
   sessionName?: string
 ): string | null {
   if (provider !== 'claude') return null;
   const name = sessionName?.trim();
-  return name ? `/remote-control ${name}` : '/remote-control';
+  if (!name) return '/remote-control';
+  return `/remote-control ${name}`;
 }
 
 /** Initial TUI output needs a short provider-specific settle before typing. */

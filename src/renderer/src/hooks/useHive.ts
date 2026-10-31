@@ -10,6 +10,7 @@ import {
   type HarnessConfig
 } from '@/store/config';
 import {
+  buildRemoteControlSessionName,
   clearCommandForProvider,
   compactionCommandForProvider,
   remoteControlCommandForProvider,
@@ -338,6 +339,9 @@ export function useHive(config: HarnessConfig | null): void {
   // In-flight spawn guard so a re-render / StrictMode double-mount can't spawn
   // the orchestrator twice (the window between the listPtys check and spawnPty is racy).
   const orchestratorSpawning = useRef(false);
+  // Retain the captured remote-control session name for the orchestrator across
+  // retries and re-renders of that launch so both CLI flags and slash commands match.
+  const orchestratorRcSessionName = useRef<string | null>(null);
   // Per-agent timestamp until which auto-typers (inbox-wake #3, queue-drain #4)
   // must leave the agent alone — set while its boot sequence is typing so nothing
   // collides with /remote-control + the orientation prompt.
@@ -433,6 +437,14 @@ export function useHive(config: HarnessConfig | null): void {
       const command = applyModelToCommandLine(savedOrchestratorCmd, orchestratorModel, orchestratorProvider)
         ?? buildSpawnCommand(config, orchestratorModel, orchestratorProvider);
       const [exe, ...args] = tokenizeCommand(command.trim());
+      // Capture the unified launch session name once per orchestrator launch so that
+      // the CLI flag (--remote-control-session-name-prefix) and slash command (/remote-control)
+      // share the exact same name across minute boundaries, re-renders, and retries.
+      if (!orchestratorRcSessionName.current) {
+        orchestratorRcSessionName.current = buildRemoteControlSessionName(orchestratorName);
+      }
+      const launchSessionName = orchestratorRcSessionName.current;
+
       const res = await window.cth.spawnPty({
         id: ORCHESTRATOR_PTY,
         cwd: config.harnessHome!,
@@ -447,6 +459,7 @@ export function useHive(config: HarnessConfig | null): void {
         // fresh session. Without this the most important context on the floor —
         // the orchestrator's — was lost on every restart.
         resume: true,
+        remoteControlSessionName: launchSessionName,
         hive: { id: ORCHESTRATOR_ID, name: orchestratorName, provider: orchestratorProvider, command: command.trim(), cwd: config.harnessHome!, isOrchestrator: true, role: 'orchestrator' }
       });
       if (cancelled) { orchestratorSpawning.current = false; return; }
@@ -487,7 +500,8 @@ export function useHive(config: HarnessConfig | null): void {
       bootGraceUntil.current[ORCHESTRATOR_ID] = Date.now() + BOOT_GRACE_MS;
       void (async () => {
         try {
-          const remoteCommand = remoteControlCommandForProvider(orchestratorProvider, orchestratorName);
+          const remoteSession = res.remoteControlSessionName || launchSessionName;
+          const remoteCommand = remoteControlCommandForProvider(orchestratorProvider, remoteSession);
           if (remoteCommand) {
             // settleMs pauses the chain ~1.5s after /remote-control before the
             // orientation prompt (fresh spawns only) is submitted next.
