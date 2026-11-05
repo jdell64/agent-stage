@@ -103,9 +103,6 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   const [home, setHome] = useState<string>('');
   const [repos, setRepos] = useState<string[]>([]);
   const [autoMode, setAutoMode] = useState<boolean>(true);
-  // Anonymous usage stats (TELEMETRY.md). Default ON (opt-out); persisted by
-  // finish() so unchecking before finishing means nothing is ever sent.
-  const [shareStats, setShareStats] = useState<boolean>(true);
   const [orchestratorProvider, setOrchestratorProvider] = useState<AgentProvider>('claude');
   const [orchestratorModel, setOrchestratorModel] = useState<string | undefined>(
     providerPreset('claude').recommendedOrchestratorModel
@@ -264,7 +261,6 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       autoMode,
       orchestratorProvider,
       orchestratorModel,
-      telemetryEnabled: shareStats,
       officeTheme: selectedPack
     });
     setBusy(false);
@@ -846,16 +842,6 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                   tint="var(--cth-sky-light)"
                   edge="var(--cth-sky)"
                   onChange={toggleOpenAtLogin}
-                />
-
-                <ToggleRow
-                  icon="info"
-                  label={t('onboarding.permissions.shareStats')}
-                  desc={t('onboarding.permissions.shareStatsDesc')}
-                  on={shareStats}
-                  tint="var(--cth-lemon-light)"
-                  edge="var(--cth-lemon)"
-                  onChange={() => setShareStats(!shareStats)}
                 />
 
                 {/* LEVER 4 "— instruction-only: the OS won't let the app flip its sleep setting itself, so we deep-link the pane where one exists (macOS/Windows) and fall back to text-only guidance on Linux. */}

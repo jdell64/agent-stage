@@ -515,15 +515,6 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
     catch { setAutoUpdateOn(!next); }
   };
 
-  // ─── Anonymous usage stats (default ON = opt-out; contract in TELEMETRY.md) ─
-  const [telemetryOn, setTelemetryOn] = useState<boolean>(config.telemetryEnabled !== false);
-  const toggleTelemetry = async () => {
-    const next = !telemetryOn;
-    setTelemetryOn(next);
-    try { stage({ telemetryEnabled: next }); }
-    catch { setTelemetryOn(!next); }
-  };
-
   // --- Free Flow (voice dictation → message queue) ---
   const setFreeflowEnabledStore = useStore((s) => s.setFreeflowEnabled);
   const setHasGroqKeyStore = useStore((s) => s.setHasGroqKey);
@@ -1188,24 +1179,6 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                             onClick={toggleAutoUpdate}
                           >
                             {autoUpdateOn ? t('common.on') : t('common.off')}
-                          </PixelButton>
-                        </div>
-                        <div style={{ height: 10 }} />
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                            <span style={{ fontSize: 13, lineHeight: '20px', color: 'var(--cth-ink-900)' }}>
-                              {t('settings.general.telemetry')}
-                            </span>
-                            <span style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-500)' }}>
-                              {t('settings.general.telemetryDesc')}
-                            </span>
-                          </div>
-                          <PixelButton
-                            variant={telemetryOn ? 'primary' : 'secondary'}
-                            size="sm"
-                            onClick={toggleTelemetry}
-                          >
-                            {telemetryOn ? t('common.on') : t('common.off')}
                           </PixelButton>
                         </div>
                       </div>

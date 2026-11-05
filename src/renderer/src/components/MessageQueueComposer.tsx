@@ -142,12 +142,6 @@ export function MessageQueueComposer({ agent }: MessageQueueComposerProps) {
           : 'Attached files:\n') + attachments.map((a) => `- ${a.path} (${a.name})`).join('\n')
       : text;
     enqueueMessage(agent.id, body);
-    // Counted HERE, at the composer's submit, and NOT inside enqueueMessage:
-    // that store action is also how work orders, Slack inbound, nudges and
-    // compact commands reach an agent, and none of those is a person sending a
-    // message. Past the isComposingKey guard in onKey, so an IME candidate
-    // Enter never counts. (TELEMETRY.md → message_sent)
-    void window.cth.trackMessageSent('composer');
     setText('');
     setAttachments([]);
   };

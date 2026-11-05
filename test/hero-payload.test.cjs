@@ -82,8 +82,9 @@ test('unknown fields are ignored, so adding one later cannot break older builds'
   assert.equal(Object.keys(h).sort().join(','), 'notice,plan,sponsor');
 });
 
-test('the shipped docs/hero.json parses to a renderable payload', () => {
-  const raw = JSON.parse(require('node:fs').readFileSync('docs/hero.json', 'utf8'));
-  const h = parseHeroPayload(raw);
-  assert.ok(h.plan.label && h.plan.blurb, 'the file we actually ship must render');
+test('loadHero returns DEFAULT_HERO locally without network requests', async () => {
+  const { loadHero } = loadTs('src/main/hero.ts');
+  const res = await loadHero();
+  assert.deepEqual(res.hero, DEFAULT_HERO);
+  assert.equal(res.stale, false);
 });

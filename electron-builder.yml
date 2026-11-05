@@ -137,7 +137,7 @@ mac:
       arch: [universal]
     - target: zip
       arch: [universal]
-  artifactName: Munder-Difflin-${version}-mac-${arch}.${ext}
+  artifactName: Agent-Stage-${version}-mac-${arch}.${ext}
 
 dmg:
   title: Agent Stage ${version}
@@ -155,11 +155,11 @@ nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
-  artifactName: Munder-Difflin-${version}-win-x64-setup.exe
+  artifactName: Agent-Stage-${version}-win-x64-setup.exe
   shortcutName: Agent Stage
 
 portable:
-  artifactName: Munder-Difflin-${version}-win-x64-portable.exe
+  artifactName: Agent-Stage-${version}-win-x64-portable.exe
 
 # ---- Linux ----
 linux:
@@ -168,4 +168,4 @@ linux:
   target:
     - target: AppImage
       arch: [x64]
-  artifactName: Munder-Difflin-${version}-linux-x86_64.AppImage
+  artifactName: Agent-Stage-${version}-linux-x86_64.AppImage
