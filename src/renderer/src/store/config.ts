@@ -96,9 +96,6 @@ export interface HarnessConfig {
   strongKeepalive?: boolean;
   /** Auto-update from GitHub releases (default ON; Settings → General). */
   autoUpdate?: boolean;
-  /** Anonymous product analytics (default ON, opt-out; see TELEMETRY.md).
-   *  Mirrors the main-process field (src/main/config.ts). */
-  telemetryEnabled?: boolean;
   slackEnabled?: boolean;
   slackSigningSecret?: string;
   slackBotToken?: string;
