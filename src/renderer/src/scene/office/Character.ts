@@ -233,6 +233,10 @@ export class Character {
 
   getAnimation(): CharacterAnimation { return this.state; }
   getDeskTile(): { x: number; y: number } { return this.deskTile; }
+  setDesk(tile: { x: number; y: number }, direction: 'up' | 'down' | 'left' | 'right' = 'down'): void {
+    this.deskTile = tile;
+    this.seatDirection = direction;
+  }
   getPixelPosition(): { x: number; y: number } { return { x: this.px, y: this.py }; }
 
   getTilePosition(): { x: number; y: number } {
