@@ -355,6 +355,28 @@ export function applyThemeChrome(theme: ThemeConfig): void {
   if (chrome.defaultMode) setAppTheme(chrome.defaultMode);
 }
 
+/** Evict one or all cached themes so the next `loadTheme()` re-reads the pack
+ *  from disk and creates fresh blob: URLs (e.g. after clicking Rescan). */
+export function invalidateThemeCache(id?: ThemeId): void {
+  if (id !== undefined) {
+    const normId = normalizeThemeId(id);
+    THEMES.delete(normId);
+    THEME_LOADS.delete(normId);
+    const urls = THEME_OBJECT_URLS.get(normId);
+    if (urls) {
+      for (const u of urls) URL.revokeObjectURL(u);
+      THEME_OBJECT_URLS.delete(normId);
+    }
+    return;
+  }
+  THEMES.clear();
+  THEME_LOADS.clear();
+  for (const urls of THEME_OBJECT_URLS.values()) {
+    for (const u of urls) URL.revokeObjectURL(u);
+  }
+  THEME_OBJECT_URLS.clear();
+}
+
 /** Resolve a theme id to a renderable ThemeConfig. Async by design;
  *  loads disk pack via window.cth.loadThemePack(id) and caches in THEMES.
  *  Falls back to DEFAULT_THEME_ID ('plain') on any failure. */

@@ -190,6 +190,7 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
   // The active office theme (store mirror of config.officeTheme). Changing it
   // tears down and rebuilds the whole scene on the new map/cast (see deps below).
   const officeTheme = useStore((s) => s.officeTheme);
+  const themeRevision = useStore((s) => s.themeRevision);
 
   // Is the floor actually on screen? A fullscreen terminal or file editor covers
   // it completely, and a hidden window shows nothing at all — but the Pixi ticker
@@ -1824,7 +1825,7 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
       appRef.current = null;
       while (host.firstChild) host.removeChild(host.firstChild);
     };
-  }, [officeTheme, glGeneration, i18n.language]);
+  }, [officeTheme, themeRevision, glGeneration, i18n.language]);
 
   return (
     <div

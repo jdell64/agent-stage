@@ -25,6 +25,7 @@ export function SpritePortrait({
 }: SpritePortraitProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const officeTheme = useStore((s) => s.officeTheme);
+  const themeRevision = useStore((s) => s.themeRevision);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -109,7 +110,7 @@ export function SpritePortrait({
     void draw();
 
     return () => { cancelled = true; };
-  }, [character, scale, background, officeTheme]);
+  }, [character, scale, background, officeTheme, themeRevision]);
 
   // A fractional scale can land on a fractional pixel count; the canvas
   // attributes are integers either way, so round once and use the same number

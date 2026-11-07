@@ -17,6 +17,7 @@ export interface CurrentCastInfo {
  */
 export function useThemeCast(): CurrentCastInfo {
   const officeTheme = useStore((s) => s.officeTheme);
+  const themeRevision = useStore((s) => s.themeRevision);
   const [cast, setCast] = useState<ThemeCast | null>(() => getTheme(officeTheme)?.cast ?? null);
 
   useEffect(() => {
@@ -37,7 +38,7 @@ export function useThemeCast(): CurrentCastInfo {
     });
 
     return () => { cancelled = true; };
-  }, [officeTheme]);
+  }, [officeTheme, themeRevision]);
 
   // byName may carry legacy-name aliases pointing at the same member; list each once.
   const roster: CastMember[] = cast?.byName
