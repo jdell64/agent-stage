@@ -50,6 +50,7 @@ export const UPSTREAM_EXCLUDED_PATHS = [
   'docs/r',
   'docs/drops',
   'docs/hires',
+  'docs/blog',
   'blog',
   'seo',
   'landing-remotion',
