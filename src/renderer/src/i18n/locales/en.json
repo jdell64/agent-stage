@@ -79,7 +79,15 @@
     "stopAfterStepTip": "Let it finish the step it is on, then stop. The process and its session survive, so Restart and Continue can pick it back up. To end the process outright, use the X.",
     "stopAfterStepAria": "Stop this agent after the current step",
     "steerTip": "Hands the agent a note at its next turn boundary. It does not interrupt what it is doing now, and nothing is typed into its terminal.",
-    "steerAria": "Send this agent a note"
+    "steerAria": "Send this agent a note",
+    "flashRestarted": "restarted & resumed conversation",
+    "flashRestartedFresh": "restarted (no saved transcript — started fresh)"
+  },
+  "terminal": {
+    "live": "live",
+    "stopped": "stopped",
+    "restartFresh": "fresh restart",
+    "restartFreshTitle": "Respawn {{name}} with a fresh session (do not resume prior conversation)"
   },
   "agentCard": {
     "boss": "BOSS",
@@ -438,6 +446,8 @@
     "archived": "ARCHIVED ({{count}})",
     "showClosed": "show closed agents",
     "hideClosed": "hide closed agents",
+    "restoreArchived": "restore",
+    "restoreArchivedTitle": "Respawn {{name}} back onto the floor and resume its prior conversation if available",
     "directories": "DIRECTORIES",
     "noRepos": "No registered repos.",
     "openInTerminal": "Open in Terminal.app",

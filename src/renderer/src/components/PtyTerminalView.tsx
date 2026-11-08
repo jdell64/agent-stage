@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
+import { useTranslation } from 'react-i18next';
 import '@xterm/xterm/css/xterm.css';
 import { Icon } from './Icon';
-import { acquireTerminal, attachTerminal, detachTerminal, reflowTerminal } from './terminalPool';
+import { PixelButton } from './PixelButton';
+import { acquireTerminal, attachTerminal, detachTerminal, reflowTerminal, useTerminalExitState } from './terminalPool';
 import {
   DEFAULT_TERMINAL_FONT_SIZE,
   MAX_TERMINAL_FONT_SIZE,
@@ -13,6 +15,8 @@ import {
 } from './terminalFontSize';
 import { useAppTheme } from '@/design/theme';
 import { buildXtermTheme } from '@/design/xtermPalette';
+import { useStore } from '@/store/store';
+import { restartAgentPty } from '@/utils/restartAgent';
 
 // Zoom lives in ./terminalFontSize so anything outside the terminal (the message
 // composer) can scale with it too; these aliases keep the call sites below short.
@@ -64,6 +68,7 @@ export interface PtyTerminalViewProps {
 }
 
 export function PtyTerminalView({ ptyId, onStreamData, onUserPrompt, onToggleFullscreen, fullscreen, embedded }: PtyTerminalViewProps) {
+  const { t } = useTranslation();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const onStreamDataRef = useRef(onStreamData);
   onStreamDataRef.current = onStreamData;
@@ -74,6 +79,21 @@ export function PtyTerminalView({ ptyId, onStreamData, onUserPrompt, onToggleFul
   const ptyTheme: PtyTheme = useAppTheme();
   const ptyThemeRef = useRef(ptyTheme);
   ptyThemeRef.current = ptyTheme;
+  const exitState = useTerminalExitState(ptyId);
+  const agent = useStore((s) => s.agents.find((a) => a.ptyId === ptyId));
+  const [restarting, setRestarting] = useState(false);
+  const [restartError, setRestartError] = useState<string | null>(null);
+
+  const handleRestart = async (resume: boolean) => {
+    if (!agent || restarting) return;
+    setRestarting(true);
+    setRestartError(null);
+    const res = await restartAgentPty(agent, { resume, resumeOptional: true });
+    setRestarting(false);
+    if (!res.ok) {
+      setRestartError(res.error ?? t('commandCenter.restartFailed'));
+    }
+  };
 
   // Attach this view to the pty's persistent terminal. The terminal and its
   // buffer live in the pool across mounts, so re-parenting its host element
@@ -312,11 +332,40 @@ export function PtyTerminalView({ ptyId, onStreamData, onUserPrompt, onToggleFul
         paddingTop: embedded ? 6 : 0
       }}>
         <span style={{
-          width: 8, height: 8, background: 'var(--cth-mint)',
+          width: 8, height: 8,
+          background: exitState.exited ? 'var(--cth-coral)' : 'var(--cth-mint)',
           boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
-          animation: 'cth-pulse 1200ms steps(2, end) infinite'
+          animation: exitState.exited ? 'none' : 'cth-pulse 1200ms steps(2, end) infinite'
         }} />
-        live · pty {ptyId}
+        <span>
+          {exitState.exited
+            ? `${t('terminal.stopped')}${exitState.exitCode !== undefined ? ` (${exitState.exitCode})` : ''} · pty ${ptyId}`
+            : `${t('terminal.live')} · pty ${ptyId}`}
+        </span>
+        {exitState.exited && agent && (
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginLeft: 4 }}>
+            <PixelButton
+              variant="primary"
+              size="sm"
+              disabled={restarting}
+              onClick={() => handleRestart(true)}
+            >
+              <span title={t('commandCenter.restartContinueTitle', { name: agent.name })}>
+                {restarting ? t('common.restarting') : `↺ ${t('commandCenter.restartContinue')}`}
+              </span>
+            </PixelButton>
+            <PixelButton
+              variant="secondary"
+              size="sm"
+              disabled={restarting}
+              onClick={() => handleRestart(false)}
+            >
+              <span title={t('terminal.restartFreshTitle', { name: agent.name })}>
+                {t('terminal.restartFresh')}
+              </span>
+            </PixelButton>
+          </div>
+        )}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 }}>
           {/* v0.3.4: the theme + enter-fullscreen buttons moved to the TITLE BAR
               (top right) — more accessible, and the theme now darkens the whole
@@ -349,6 +398,16 @@ export function PtyTerminalView({ ptyId, onStreamData, onUserPrompt, onToggleFul
           )}
         </div>
       </div>
+      {restartError && (
+        <div style={{
+          fontSize: 11,
+          color: 'var(--cth-coral)',
+          padding: embedded ? '2px 8px' : '2px 0',
+          fontFamily: 'var(--cth-font-ui)'
+        }}>
+          {restartError}
+        </div>
+      )}
       <div ref={hostRef} onDragOver={onDragOver} onDrop={onDrop} style={{
         flex: 1, minHeight: 0,
         padding: embedded ? '0 8px 8px' : 0

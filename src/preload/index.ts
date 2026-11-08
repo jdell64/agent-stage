@@ -589,8 +589,8 @@ const api = {
     ipcRenderer.invoke('pty:resize', id, cols, rows),
   redrawPty: (id: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('pty:redraw', id),
-  killPty: (id: string): Promise<{ ok: boolean; error?: string }> =>
-    ipcRenderer.invoke('pty:kill', id),
+  killPty: (id: string, opts?: { preserveWorktree?: boolean }): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('pty:kill', id, opts),
   listPtys: (): Promise<Array<{
     id: string;
     cwd: string;

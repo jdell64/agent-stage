@@ -12,7 +12,8 @@ import { TriggersTab } from './triggers/TriggersTab';
 import { TriggerHistoryTab } from './triggers/TriggerHistoryTab';
 import { WorkersTab } from './WorkersTab';
 import { SkillsTab } from './SkillsTab';
-import { acquireTerminal, disposeTerminal, resetTerminal } from './terminalPool';
+import { getTerminalExitState } from './terminalPool';
+import { restartAgentPty } from '@/utils/restartAgent';
 import { terminalInstanceKey } from './terminalRecovery';
 import { Icon } from './Icon';
 import { MemoryGraphPanel } from './MemoryGraphPanel';
@@ -410,11 +411,6 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
     opts: {
       resume?: boolean;
       provider?: AgentProvider;
-      /** Resume if we can, start fresh if we can't, instead of refusing.
-       *  "Restart & Continue" wants the hard failure — continuing is the entire
-       *  point, so silently starting a blank session would be worse than an
-       *  error. A model change wants the soft one: the user asked to change
-       *  model, and an agent with no recorded session still has to get one. */
       resumeOptional?: boolean;
     } = {}
   ) => {
@@ -422,141 +418,18 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
     setRestarting(a.id);
     setRestartErrors((errors) => ({ ...errors, [a.id]: '' }));
     try {
-      const cfg = await window.cth.getConfig();
-      // Respawn on the same CLI this agent already runs on (inferred from its
-      // command if not explicitly tagged) so an Antigravity/Codex worker stays
-      // on its own binary. tokenizeCommand keeps quoted model labels one arg.
-      // opts.provider overrides the inferred provider — used when changing ORCHESTRATOR's engine.
-      const previousProvider = inferAgentProvider(a.command, a.provider);
-      const provider = opts.provider ?? previousProvider;
-      let resume = opts.resume === true && provider === previousProvider;
-      if (opts.resume && !resume && !opts.resumeOptional) {
-        throw new Error('Cannot resume a session through a different provider.');
-      }
-      let resumeSessionId: string | undefined;
-      const registry = await window.cth.hiveRegistry().catch(() => null);
-      if (resume) {
-        // A precondition miss is fatal for an explicit "continue", and merely
-        // means "start fresh" for an opportunistic one (see resumeOptional).
-        const giveUpOnResume = (reason: string) => {
-          if (!opts.resumeOptional) throw new Error(reason);
-          resume = false;
-          resumeSessionId = undefined;
-        };
-        resumeSessionId = registry?.agents?.[a.id]?.sessionId;
-        if (!resumeSessionId) {
-          giveUpOnResume('No recorded session ID; current process was left running.');
-        } else if (provider === 'claude' && !(await window.cth.resolveSessionCwd(resumeSessionId))) {
-          giveUpOnResume('Session transcript not found; current process was left running.');
-        }
-      }
-      // Capture the live grid before replacing anything. Restart & Continue
-      // recreates only this agent's xterm; model changes retain the old
-      // in-place reset behavior.
-      const oldEntry = acquireTerminal(a.ptyId);
-      let cols = oldEntry.term.cols || 100;
-      let rows = oldEntry.term.rows || 30;
-      try {
-        oldEntry.fit.fit();
-        cols = oldEntry.term.cols;
-        rows = oldEntry.term.rows;
-      } catch { /* host not sized yet */ }
-
-      const killed = await window.cth.killPty(a.ptyId);
-      // A pty that is ALREADY gone is the state this kill was trying to reach, so
-      // it is not a failure. This is the single most common way to arrive at
-      // "Restart & Continue": the session died on its own — a crash, or Ctrl-C
-      // twice — main dropped it from the session map, and kill then answers
-      // `no pty: <id>`. Treating that as fatal aborted before the respawn and
-      // turned the one situation the button exists for into a dead end.
-      if (!killed.ok && !/^no pty:/.test(killed.error ?? '')) {
-        throw new Error(killed.error ?? 'Could not stop the current process.');
-      }
-      if (!resume) {
-        resetTerminal(a.ptyId);
-      }
-      // Reuse custom launch flags from the agent's persisted command (or hive
-      // registry fallback) before falling back to the provider default.
-      const savedCommand = (a.command ?? '').trim() || (registry?.agents?.[a.id]?.command ?? '').trim();
-      const command = applyModelToCommandLine(savedCommand, model, provider)
-        ?? buildSpawnCommand(cfg, model, provider);
-      const [exe, ...args] = tokenizeCommand(command.trim());
-      const hive = {
-        id: a.id,
-        name: a.name,
-        cwd: a.cwd,
-        provider,
-        command: command.trim(),
-        isOrchestrator: a.isOrchestrator,
-        isAssistant: a.isAssistant,
-        role: roleForHiveSpawn(a)
-      };
-      const res = await window.cth.spawnPty({
-        id: a.ptyId,
-        cwd: a.cwd,
-        command: exe,
-        args,
-        provider,
-        cols,
-        rows,
-        hive,
-        resume,
-        resumeSessionId,
-        requireResume: resume
+      const res = await restartAgentPty(a, {
+        model,
+        provider: opts.provider,
+        resume: opts.resume,
+        resumeOptional: opts.resumeOptional ?? true,
       });
-      if (!res.ok) throw new Error(res.error ?? 'Restart failed.');
-      if (resume && res.resumed !== true) {
-        throw new Error('Resume was refused; no replacement session was accepted.');
+      if (!res.ok) {
+        setRestartErrors((errors) => ({
+          ...errors,
+          [a.id]: res.error ?? t('commandCenter.restartFailed')
+        }));
       }
-      if (resume) {
-        // The replacement is accepted, so NOW it is safe to throw the old
-        // terminal away. (It used to run BEFORE spawnPty, so one of the throws
-        // above left a fresh blank xterm in the pool with the scrollback gone
-        // forever — node-pty keeps none — and the label stuck at
-        // 'recreating terminal…'.) A blank xterm can retain corrupt
-        // renderer/DOM/subscription state even after its PTY is healthy, which
-        // is why the resume path replaces it at all; the spawn answer beat the
-        // CLI's first frame, so no startup output can be missed.
-        disposeTerminal(a.ptyId);
-        acquireTerminal(a.ptyId);
-        // Bump the key so React remounts only this agent's terminal card; the
-        // remount's attach re-requests a PTY redraw for anything it raced.
-        updateAgent(a.id, {
-          terminalGeneration: (a.terminalGeneration ?? 0) + 1,
-          status: 'idle',
-          action: 'recreating terminal…'
-        });
-      }
-      if (res.ok) {
-        // Record the model even on a resume. A same-provider model change now
-        // RESUMES the session (that is the point — you keep the conversation and
-        // just swap the model), so "resume ⇒ the model is unchanged" stopped
-        // being true. Skipping the patch left the live process on the new model
-        // while the selector and the persisted agent kept the old one, and the
-        // next restore relaunched the old command. `command` is rebuilt from the
-        // selected model above, so on a genuine no-change restart this is a no-op.
-        const patch = resume
-          ? {
-              command: command.trim(),
-              provider,
-              model,
-              status: 'idle' as const,
-              action: 'continuing…'
-            }
-          : {
-              command: command.trim(),
-              provider,
-              model,
-              status: 'idle' as const,
-              action: provider === previousProvider ? 'restarting…' : `switching to ${providerPreset(provider).label}…`
-            };
-        updateAgent(a.id, patch);
-      }
-    } catch (error) {
-      setRestartErrors((errors) => ({
-        ...errors,
-        [a.id]: error instanceof Error ? error.message : String(error)
-      }));
     } finally {
       setRestarting(null);
     }
@@ -732,6 +605,15 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
                 }}
               >{a.name}{a.isOrchestrator ? t('commandCenter.orchestratorTag') : ''}</button>
               <PixelBadge status={armed ? 'looping' : a.status} />
+              {getTerminalExitState(a.ptyId).exited && (
+                <span style={{
+                  fontSize: 10, lineHeight: '14px', padding: '0 5px',
+                  background: 'var(--cth-coral-light)', color: 'var(--cth-coral)',
+                  boxShadow: 'inset 0 0 0 1px var(--cth-coral)', fontFamily: 'var(--cth-font-ui)'
+                }}>
+                  {t('terminal.stopped')}
+                </span>
+              )}
               {armed && <span title={breaker?.reason} style={{ color: 'var(--cth-coral)', fontSize: 12 }}>⚠</span>}
               <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--cth-ink-500)' }}>
                 {t('commandCenter.toolCalls', { count: toolCounts[a.id] ?? 0 })}
@@ -860,22 +742,19 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
                   : t('commandCenter.modelRestarts', { provider: agentPreset.label })}
               </span>
               {/* Restart & Continue — kill + respawn keeping the SAME model and
-                  resuming the prior conversation (--resume). Use this to redraw a
-                  garbled TUI (e.g. after dragging the window across displays)
-                  without losing the thread. */}
-              {(agentProvider === 'claude' || agentPreset.resumeFlag || agentPreset.resumeSubcommand) && <>
-                <span style={{ flex: 1 }} />
-                <PixelButton
-                  variant="secondary"
-                  size="sm"
-                  disabled={restarting === a.id}
-                  onClick={() => restartWithModel(a, a.model, { resume: true })}
-                >
-                  <span title={t('commandCenter.restartContinueTitle')}>
-                    {t('commandCenter.restartContinue')}
-                  </span>
-                </PixelButton>
-              </>}
+                  resuming the prior conversation (--resume), or starting fresh
+                  when the provider doesn't support --resume or no session id was recorded. */}
+              <span style={{ flex: 1 }} />
+              <PixelButton
+                variant={getTerminalExitState(a.ptyId).exited ? 'primary' : 'secondary'}
+                size="sm"
+                disabled={restarting === a.id}
+                onClick={() => restartWithModel(a, a.model, { resume: true, resumeOptional: true })}
+              >
+                <span title={t('commandCenter.restartContinueTitle', { name: a.name })}>
+                  {t('commandCenter.restartContinue')}
+                </span>
+              </PixelButton>
             </div>
             )}
             {restartErrors[a.id] && (
@@ -1041,7 +920,21 @@ function ArchivedSection() {
   const archivedAgents = useStore((s) => s.archivedAgents);
   const removeArchivedAgent = useStore((s) => s.removeArchivedAgent);
   const [open, setOpen] = useState(false);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [restoreError, setRestoreError] = useState<Record<string, string>>({});
   if (archivedAgents.length === 0) return null;
+
+  const restoreArchived = async (a: Agent) => {
+    if (restoringId) return;
+    setRestoringId(a.id);
+    setRestoreError((prev) => ({ ...prev, [a.id]: '' }));
+    const res = await restartAgentPty(a, { resume: true, resumeOptional: true });
+    setRestoringId(null);
+    if (!res.ok) {
+      setRestoreError((prev) => ({ ...prev, [a.id]: res.error ?? t('commandCenter.restartFailed') }));
+    }
+  };
+
   return (
     <Section title={t('commandCenter.archived', { count: archivedAgents.length })}>
       <button
@@ -1056,25 +949,43 @@ function ArchivedSection() {
       >{open ? '▾' : '▸'} {open ? t('commandCenter.hideClosed') : t('commandCenter.showClosed')}</button>
       {open && archivedAgents.map((a) => (
         <div key={a.id} style={{
-          display: 'flex', alignItems: 'center', gap: 8,
-          padding: 6, marginBottom: 6, opacity: 0.7,
+          display: 'flex', flexDirection: 'column', gap: 4,
+          padding: 6, marginBottom: 6, opacity: 0.85,
           background: 'var(--cth-paper-100)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)'
         }}>
-          <div style={{
-            width: 24, height: 24, background: `var(--cth-${a.accent}-light)`,
-            boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
-            display: 'flex', alignItems: 'flex-end', justifyContent: 'center', overflow: 'hidden', flexShrink: 0
-          }}>
-            <SpritePortrait character={a.character} scale={1} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{
+              width: 24, height: 24, background: `var(--cth-${a.accent}-light)`,
+              boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
+              display: 'flex', alignItems: 'flex-end', justifyContent: 'center', overflow: 'hidden', flexShrink: 0
+            }}>
+              <SpritePortrait character={a.character} scale={1} />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 12, color: 'var(--cth-ink-700)' }}>{a.name}</div>
+              <div style={{ fontSize: 11, color: 'var(--cth-ink-500)', wordBreak: 'break-all' }}>{a.cwd}</div>
+            </div>
+            <PixelButton
+              variant="secondary"
+              size="sm"
+              disabled={restoringId === a.id}
+              onClick={() => restoreArchived(a)}
+            >
+              <span title={t('commandCenter.restoreArchivedTitle', { name: a.name })}>
+                {restoringId === a.id ? t('common.restarting') : `↺ ${t('commandCenter.restoreArchived')}`}
+              </span>
+            </PixelButton>
+            <button
+              onClick={() => removeArchivedAgent(a.id)}
+              title={t('common.delete')}
+              style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--cth-ink-500)', flexShrink: 0 }}
+            ><Icon name="x" /></button>
           </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 12, color: 'var(--cth-ink-700)' }}>{a.name}</div>
-            <div style={{ fontSize: 11, color: 'var(--cth-ink-500)', wordBreak: 'break-all' }}>{a.cwd}</div>
-          </div>
-          <button
-            onClick={() => removeArchivedAgent(a.id)}
-            style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--cth-ink-500)', flexShrink: 0 }}
-          ><Icon name="x" /></button>
+          {restoreError[a.id] && (
+            <div style={{ fontSize: 11, color: 'var(--cth-coral)' }}>
+              {restoreError[a.id]}
+            </div>
+          )}
         </div>
       ))}
     </Section>

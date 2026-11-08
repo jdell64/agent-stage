@@ -471,7 +471,7 @@ const preservedWorktrees = new Map<string, PreservedWorktree>();
  * step is wrapped so a teardown error can never crash the caller (an IPC
  * handler or node-pty's onExit).
  */
-function teardownPty(id: string): void {
+function teardownPty(id: string, opts?: { preserveWorktree?: boolean }): void {
   // Ephemeral-worker flag, read BEFORE the cleanup below deletes the entry. All
   // worker deaths (done-release, idle/token reap, manual stop, crash) funnel
   // through here, so this is the one place their floor card gets archived
@@ -504,20 +504,24 @@ function teardownPty(id: string): void {
     }
   }
   // 2) Remove the isolated worktree, if any. Non-blocking; errors are logged.
+  //    When a non-ephemeral agent's PTY exits naturally (e.g. the user hit Ctrl-C
+  //    inside its terminal), `preserveWorktree` is true because the agent card is
+  //    still on the floor and the user may click "Restart & Continue" to respawn
+  //    it inside its existing worktree. Explicit `pty:kill` (when closing an agent
+  //    with ✕) passes no flag and removes the worktree when not respawned.
   const wtPath = worktreePaths.get(id);
   if (wtPath) {
-    const origCwd = worktreeOrigins.get(id) ?? wtPath;
-    worktreePaths.delete(id);
-    worktreeOrigins.delete(id);
-    // Ephemeral workers get a SAFETY-GATED teardown: never auto-remove a worktree
-    // that holds unintegrated work. This sits INSIDE teardownPty so it covers ALL
-    // teardown routes — a worker that finished (controller kill), crashed, or was
-    // idle-reaped all land here. Normal agents keep the immediate force-remove.
     const worker = liveWorkers.get(id);
     if (worker) {
+      const origCwd = worktreeOrigins.get(id) ?? wtPath;
+      worktreePaths.delete(id);
+      worktreeOrigins.delete(id);
       liveWorkers.delete(id);
       void finalizeWorkerWorktree(wtPath, origCwd, worker);
-    } else {
+    } else if (!opts?.preserveWorktree) {
+      const origCwd = worktreeOrigins.get(id) ?? wtPath;
+      worktreePaths.delete(id);
+      worktreeOrigins.delete(id);
       void removeWorktree(origCwd, wtPath)
         .then(r => { if (!r.ok) console.error('[worktree] removeWorktree failed:', r.error); })
         .catch(e => console.error('[worktree] removeWorktree threw:', e));
@@ -665,7 +669,7 @@ ptyManager.setExitHandler((id, exitCode, info) => {
     }
     // Non-zero exit = install failed; leave its honest manual-fix message on screen.
   }
-  teardownPty(id);
+  teardownPty(id, { preserveWorktree: true });
 });
 
 /** Keep the system from suspending the harness while agents are running.
@@ -3244,13 +3248,14 @@ ipcMain.handle('pty:redraw', (_evt, id: string) => {
   if (typeof id !== 'string') return { ok: false, error: 'invalid id' };
   return ptyManager.redraw(id);
 });
-ipcMain.handle('pty:kill', (_evt, id: string) => {
+ipcMain.handle('pty:kill', (_evt, id: string, opts?: { preserveWorktree?: boolean }) => {
   if (typeof id !== 'string') return { ok: false, error: 'invalid id' };
   // Kill the process, then run the shared lifecycle teardown (archive the agent,
-  // remove its isolated worktree, drop the maps). teardownPty is idempotent, so
-  // node-pty firing onExit once the child actually dies is a harmless no-op.
+  // remove its isolated worktree unless restarting in place, drop the maps).
+  // teardownPty is idempotent, so node-pty firing onExit once the child actually
+  // dies is a harmless no-op.
   const res = ptyManager.kill(id);
-  teardownPty(id);
+  teardownPty(id, opts);
   return res;
 });
 ipcMain.handle('pty:list', () => ptyManager.list());
