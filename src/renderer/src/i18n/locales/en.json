@@ -84,7 +84,15 @@
     "promoting": "promoting…",
     "promoteTip": "Temporarily promote this agent to Acting Orchestrator. Moves unread inbox messages from the current orchestrator, sends a stand-down notice, briefs this agent with the Orchestrator Charter, and unlocks Command Center tabs.",
     "promoteAria": "Temporarily promote this agent to Orchestrator",
-    "flashPromoted": "promoted to Acting Orchestrator"
+    "flashPromoted": "promoted to Acting Orchestrator",
+    "flashRestarted": "restarted & resumed conversation",
+    "flashRestartedFresh": "restarted (no saved transcript — started fresh)"
+  },
+  "terminal": {
+    "live": "live",
+    "stopped": "stopped",
+    "restartFresh": "fresh restart",
+    "restartFreshTitle": "Respawn {{name}} with a fresh session (do not resume prior conversation)"
   },
   "agentCard": {
     "boss": "BOSS",
@@ -443,6 +451,8 @@
     "archived": "ARCHIVED ({{count}})",
     "showClosed": "show closed agents",
     "hideClosed": "hide closed agents",
+    "restoreArchived": "restore",
+    "restoreArchivedTitle": "Respawn {{name}} back onto the floor and resume its prior conversation if available",
     "directories": "DIRECTORIES",
     "noRepos": "No registered repos.",
     "openInTerminal": "Open in Terminal.app",

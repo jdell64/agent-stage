@@ -1332,7 +1332,7 @@ export function useHive(config: HarnessConfig | null): void {
         // it if it still exists, else fall back to the base cwd — same as restoreTeam.
         let cwd = a.cwd;
         if (a.worktreePath && (await window.cth.gitIsRepo(a.worktreePath))) cwd = a.worktreePath;
-        await window.cth.killPty(deadId);
+        await window.cth.killPty(deadId, { preserveWorktree: true });
         // Soft-reset the pooled xterm in place (no-op if none): re-arm input and
         // clear the stale frame so the revived TUI paints clean — like the button.
         resetTerminal(deadId);

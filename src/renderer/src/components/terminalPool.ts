@@ -52,6 +52,8 @@ export interface TerminalEntry {
   /** xterm is only `open()`ed once its host is first attached to the document. */
   opened: boolean;
   exited: boolean;
+  exitCode?: number;
+  exitSignal?: number;
   /** Stream subscriptions to tear down on dispose. */
   unsub: Array<() => void>;
   /** Current consumer callbacks — set by whichever view is mounted. */
@@ -90,6 +92,46 @@ export interface TerminalEntry {
 }
 
 const pool = new Map<string, TerminalEntry>();
+const exitListeners = new Set<() => void>();
+
+function notifyExitListeners(): void {
+  for (const fn of exitListeners) {
+    try { fn(); } catch { /* noop */ }
+  }
+}
+
+export interface TerminalExitState {
+  exited: boolean;
+  exitCode?: number;
+  exitSignal?: number;
+}
+
+/** Synchronous snapshot of whether a pooled terminal's PTY process has exited. */
+export function getTerminalExitState(ptyId: string | undefined): TerminalExitState {
+  if (!ptyId) return { exited: false };
+  const entry = pool.get(ptyId);
+  if (!entry || !entry.exited) return { exited: false };
+  return { exited: true, exitCode: entry.exitCode, exitSignal: entry.exitSignal };
+}
+
+/** Reactive hook that updates immediately when a PTY exits (e.g. Ctrl-C) or restarts. */
+export function useTerminalExitState(ptyId: string | undefined): TerminalExitState {
+  const [state, setState] = useState<TerminalExitState>(() => getTerminalExitState(ptyId));
+  useEffect(() => {
+    const sync = () => {
+      const next = getTerminalExitState(ptyId);
+      setState((prev) => (
+        prev.exited === next.exited && prev.exitCode === next.exitCode && prev.exitSignal === next.exitSignal
+          ? prev
+          : next
+      ));
+    };
+    sync();
+    exitListeners.add(sync);
+    return () => { exitListeners.delete(sync); };
+  }, [ptyId]);
+  return state;
+}
 
 import { parseHexColor, oscColorBody, isDarkBackground } from './termColor';
 
@@ -204,7 +246,10 @@ export function acquireTerminal(ptyId: string, theme?: ThemeMap, fontSize = 14):
   // stale event is suppressed in the main process and never reaches here.
   entry.unsub.push(window.cth.onPtyExit(ptyId, ({ exitCode, signal }) => {
     entry.exited = true;
+    entry.exitCode = exitCode;
+    entry.exitSignal = signal;
     term.writeln(`\r\n\x1b[2m─ process exited (code ${exitCode}${signal ? `, signal ${signal}` : ''}) ─\x1b[0m`);
+    notifyExitListeners();
   }));
   // A first-time engine-CLI install just finished and the agent is auto
   // restart-and-continuing into THIS same pty (main re-ran the spawn). Re-arm the
@@ -213,7 +258,10 @@ export function acquireTerminal(ptyId: string, theme?: ThemeMap, fontSize = 14):
   // onto a clean, typeable grid. Mirrors resetTerminal but works on this closure.
   entry.unsub.push(window.cth.onPtyRelaunch(ptyId, () => {
     entry.exited = false;
+    entry.exitCode = undefined;
+    entry.exitSignal = undefined;
     try { term.reset(); } catch { /* not yet open */ }
+    notifyExitListeners();
   }));
 
   // ── Copy / paste ──────────────────────────────────────────────────────────
@@ -404,6 +452,7 @@ export function acquireTerminal(ptyId: string, theme?: ThemeMap, fontSize = 14):
   });
 
   pool.set(ptyId, entry);
+  notifyExitListeners();
   return entry;
 }
 
@@ -874,6 +923,8 @@ export function resetTerminal(
   // Re-arm input — a prior exit (or the kill that precedes the respawn) may have
   // latched `exited`, which otherwise makes onData drop keystrokes silently.
   entry.exited = false;
+  entry.exitCode = undefined;
+  entry.exitSignal = undefined;
   entry.inputDirty = false;
   entry.inputDirtyAt = 0;
   // The old process's prompt is gone with it — drop our model of that line and
@@ -890,6 +941,7 @@ export function resetTerminal(
       entry.term.reset();
     }
   } catch { /* not yet open */ }
+  notifyExitListeners();
 }
 
 /** Tear down a pty's terminal (call when the agent/pty is gone for good). */
@@ -905,6 +957,7 @@ export function disposeTerminal(ptyId: string): void {
   try { entry.term.dispose(); } catch { /* noop */ }
   entry.host.remove();
   pool.delete(ptyId);
+  notifyExitListeners();
 }
 
 // ─── v0.3.4: ⌘-click a path in terminal output ──────────────────────────────

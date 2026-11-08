@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PixelButton } from './PixelButton';
 import { AgentHoldButton } from './AgentHoldButton';
-import { isComposingKey } from '@shared/imeGuard';
+import { useTerminalExitState } from './terminalPool';
 import { useStore } from '@/store/store';
+import { restartAgentPty } from '@/utils/restartAgent';
+import { isComposingKey } from '@shared/imeGuard';
 
 /**
  * Operator control for one agent (#7C.1-7C.3) — pause (deny tools at the next
@@ -37,9 +39,11 @@ interface Snapshot {
 export function AgentControlStrip({ agentId }: { agentId: string }) {
   const { t } = useTranslation();
   const agent = useStore((s) => s.agents.find((a) => a.id === agentId));
+  const exitState = useTerminalExitState(agent?.ptyId);
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [steer, setSteer] = useState('');
   const [note, setNote] = useState('');
+  const [restarting, setRestarting] = useState(false);
   const [promoting, setPromoting] = useState(false);
   const noteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -73,6 +77,17 @@ export function AgentControlStrip({ agentId }: { agentId: string }) {
     setSteer('');
     flash(t('agentControl.flashSteer'));
   };
+  const restartAndContinue = async () => {
+    if (!agent || restarting) return;
+    setRestarting(true);
+    const res = await restartAgentPty(agent, { resume: true, resumeOptional: true });
+    setRestarting(false);
+    if (!res.ok) {
+      flash(res.error ?? t('commandCenter.restartFailed'));
+      return;
+    }
+    flash(res.fellBackToFresh ? t('agentControl.flashRestartedFresh') : t('agentControl.flashRestarted'));
+  };
   const promoteToBoss = async () => {
     if (promoting || !agent || agent.isOrchestrator || agent.isAssistant) return;
     setPromoting(true);
@@ -101,7 +116,7 @@ export function AgentControlStrip({ agentId }: { agentId: string }) {
       padding: '6px 8px', background: 'var(--cth-paper-100)',
       borderBottom: '1px solid var(--cth-ink-300)', flexShrink: 0
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
         {/* Neither of these kills anything, and the old two-word labels never
             said so — the difference is WHEN the agent stops and whether it keeps
             its session. Say the consequence on the button, the detail on hover. */}
@@ -130,6 +145,22 @@ export function AgentControlStrip({ agentId }: { agentId: string }) {
             the orchestrator — so the tooltip carries that distinction now that the
             grouping no longer does. */}
         <AgentHoldButton agentId={agentId} />
+        {agent?.ptyId && (
+          <PixelButton
+            variant={exitState.exited ? 'primary' : 'secondary'}
+            size="sm"
+            disabled={restarting}
+            onClick={restartAndContinue}
+          >
+            <span
+              className="cth-tip cth-tip-left cth-tip-wrap"
+              data-tip={t('commandCenter.restartContinueTitle', { name: agent.name })}
+              aria-label={t('commandCenter.restartContinue')}
+            >
+              {restarting ? t('common.restarting') : `↺ ${t('commandCenter.restartContinue')}`}
+            </span>
+          </PixelButton>
+        )}
         {agent && !agent.isOrchestrator && !agent.isAssistant && (
           <PixelButton variant="secondary" size="sm" onClick={() => { void promoteToBoss(); }} disabled={promoting}>
             <span
