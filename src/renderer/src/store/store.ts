@@ -279,6 +279,10 @@ interface State {
    *  on switch). OfficeFloor depends on this and rebuilds the scene on change. */
   officeTheme: ThemeId;
   setOfficeTheme: (theme: ThemeId) => void;
+  /** Bumped on theme rescan so OfficeFloor and SpritePortrait reload updated
+   *  on-disk theme pack assets without requiring a window reload. */
+  themeRevision: number;
+  bumpThemeRevision: () => void;
   /** Mirror of config.webhookTriggers — the inbound HTTP endpoints. Webhooks are
    *  editable from BOTH Settings → Connections and the Triggers tab, so neither
    *  surface keeps its own copy: both render off this list and both call the
@@ -892,6 +896,8 @@ export const useStore = create<State>((set, get) => ({
   setHasOpenAiKey: (has) => set({ hasOpenAiKey: has }),
   officeTheme: 'office',
   setOfficeTheme: (theme) => set({ officeTheme: theme }),
+  themeRevision: 0,
+  bumpThemeRevision: () => set((s) => ({ themeRevision: s.themeRevision + 1 })),
   webhookTriggers: [],
   setWebhookTriggers: (list) => set({ webhookTriggers: list }),
   // A copy, not the shared DEFAULT_ORG_TRIGGER instance — main takes the same

@@ -4,7 +4,7 @@ import type { HarnessConfig } from '@/store/config';
 import { useStore } from '@/store/store';
 import { PixelButton } from './PixelButton';
 import type { ThemeId } from '@/scene/office/themeRegistry';
-import { loadTheme } from '@/scene/office/themeLoader';
+import { loadTheme, invalidateThemeCache } from '@/scene/office/themeLoader';
 import { DEFAULT_THEME_ID, type PackSummary } from '@shared/themePack';
 
 interface ThemeCardItem {
@@ -29,6 +29,7 @@ export function OfficeThemePicker({ config }: { config: HarnessConfig }) {
   const [themesDir, setThemesDir] = useState(config.themesDir ?? '');
 
   const setOfficeTheme = useStore((s) => s.setOfficeTheme);
+  const bumpThemeRevision = useStore((s) => s.bumpThemeRevision);
 
   const applyList = (list: PackSummary[]) => {
     setPacks(list);
@@ -55,7 +56,12 @@ export function OfficeThemePicker({ config }: { config: HarnessConfig }) {
 
   const rescan = async () => {
     setNote('');
-    try { applyList(await window.cth.rescanThemes()); } catch { /* keep the current list */ }
+    try {
+      const list = await window.cth.rescanThemes();
+      applyList(list);
+      invalidateThemeCache();
+      bumpThemeRevision();
+    } catch { /* keep the current list */ }
   };
 
   const saveThemesDir = async () => {
