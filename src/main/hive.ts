@@ -193,10 +193,17 @@ export interface RegistryAgent extends AgentMeta {
    *  (e.g. "ClaudeTerminalHarness") spawns into a nonexistent dir and fails; this
    *  flag makes that visible instead of letting it slip through silently. */
   cwdValid?: boolean;
+  /** Saved worker role before temporary promotion to orchestrator, restored when
+   *  the original orchestrator resumes command. */
+  previousRole?: string;
 }
 
 export interface Registry {
   orchestratorId: string | null;
+  /** Original orchestrator id saved while another agent serves as acting orchestrator. */
+  previousOrchestratorId?: string | null;
+  /** ISO timestamp when the current acting orchestrator was promoted. */
+  actingOrchestratorSince?: string | null;
   agents: Record<string, RegistryAgent>;
 }
 
@@ -811,8 +818,18 @@ export class HiveManager {
     // identity.md and registry.role are the durable job from the hire.
     const reg = this.registry();
     const prev = reg.agents[meta.id];
+    const hasActiveActingOrchestrator = !!(
+      reg.previousOrchestratorId
+      && reg.orchestratorId
+      && reg.orchestratorId !== meta.id
+      && reg.agents[reg.orchestratorId]
+      && !reg.agents[reg.orchestratorId].archived
+    );
+    const effectiveIsOrchestrator = hasActiveActingOrchestrator
+      ? false
+      : (reg.orchestratorId === meta.id && reg.previousOrchestratorId ? true : !!meta.isOrchestrator);
     if (meta.cwd) meta = { ...meta, cwd: expandTilde(meta.cwd) };
-    const role = preferredAgentRole(meta.role, prev?.role, !!meta.isOrchestrator);
+    const role = preferredAgentRole(meta.role, prev?.role, effectiveIsOrchestrator);
     const nextProvider = meta.provider ?? prev?.provider ?? 'claude';
     const explicitCommand = typeof meta.command === 'string' && meta.command.trim() ? meta.command.trim() : undefined;
     const priorCommand = typeof prev?.command === 'string' && prev.command.trim()
@@ -820,7 +837,7 @@ export class HiveManager {
       ? prev.command.trim()
       : undefined;
     const command = explicitCommand ?? priorCommand;
-    meta = { ...meta, provider: nextProvider, role, ...(command ? { command } : {}) };
+    meta = { ...meta, isOrchestrator: effectiveIsOrchestrator, provider: nextProvider, role, ...(command ? { command } : {}) };
 
     const identity = join(dir, 'identity.md');
     writeFileSync(identity, this.identityText(meta), 'utf8'); // refresh on each spawn
@@ -1248,6 +1265,244 @@ export class HiveManager {
       }
       this.appendLog({ kind: 'agent-hold', id, onHold: hold });
       return { ok: true, onHold: hold };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  /**
+   * Temporarily promote another live agent to Acting Orchestrator, or restore
+   * the original orchestrator.
+   *
+   * 1. Flips `reg.orchestratorId` and per-agent `isOrchestrator` flags in `registry.json`
+   *    (saving `previousOrchestratorId` and the worker's `previousRole` so one click
+   *    restores the original setup).
+   * 2. Rewrites `identity.md` for both agents and patches `fleet.json`.
+   * 3. Moves any unread messages from the outgoing orchestrator's `inbox/` into the
+   *    newly promoted orchestrator's `inbox/` (`migrateInbox !== false`).
+   * 4. Places a non-waking stand-down notice in the outgoing orchestrator's inbox
+   *    (and puts the outgoing orchestrator `onHold` when `holdOutgoing !== false`).
+   * 5. Dispatches the full Orchestrator Charter + floor handover briefing to the
+   *    incoming orchestrator so a session that launched with a worker system prompt
+   *    immediately knows the orchestrator protocol.
+   */
+  promoteOrchestrator(
+    newAgentId: string,
+    opts?: { holdOutgoing?: boolean; migrateInbox?: boolean }
+  ): {
+    ok: boolean;
+    orchestratorId?: string;
+    previousOrchestratorId?: string | null;
+    oldOrchestratorId?: string;
+    migratedCount?: number;
+    oldRoleRestored?: string;
+    error?: string;
+  } {
+    const root = this.root();
+    if (!root) return { ok: false, error: 'hive disabled (no harnessHome)' };
+    const nextId = newAgentId.trim();
+    if (!nextId) return { ok: false, error: 'Target agent id is required' };
+    try {
+      const reg = this.registry();
+      const target = reg.agents[nextId];
+      if (!target) return { ok: false, error: `Agent "${nextId}" not found in registry` };
+      if (target.archived) return { ok: false, error: 'Cannot promote an archived agent' };
+      if (target.isAssistant) return { ok: false, error: 'Cannot promote the send-only prep assistant' };
+
+      const oldId = reg.orchestratorId ?? 'orchestrator';
+      if (oldId === nextId && target.isOrchestrator) {
+        return {
+          ok: true,
+          orchestratorId: nextId,
+          previousOrchestratorId: reg.previousOrchestratorId ?? null,
+          oldOrchestratorId: oldId,
+          migratedCount: 0
+        };
+      }
+
+      const holdOutgoing = opts?.holdOutgoing !== false;
+      const migrateInbox = opts?.migrateInbox !== false;
+      const oldAgent = reg.agents[oldId];
+      let oldRoleRestored: string | undefined;
+
+      // Track or clear acting-orchestrator state.
+      if (nextId === 'orchestrator' || nextId === reg.previousOrchestratorId) {
+        reg.previousOrchestratorId = null;
+        reg.actingOrchestratorSince = null;
+      } else if (!reg.previousOrchestratorId) {
+        reg.previousOrchestratorId = oldId;
+        reg.actingOrchestratorSince = new Date().toISOString();
+      }
+
+      // Demote outgoing orchestrator.
+      if (oldAgent && oldId !== nextId) {
+        oldAgent.isOrchestrator = false;
+        if (oldAgent.previousRole) {
+          oldAgent.role = oldAgent.previousRole;
+          oldRoleRestored = oldAgent.role;
+          delete oldAgent.previousRole;
+        } else if (oldId === 'orchestrator') {
+          oldAgent.role = 'standby-orchestrator';
+          oldRoleRestored = oldAgent.role;
+        }
+        if (holdOutgoing) oldAgent.onHold = true;
+        oldAgent.lastSeen = Date.now();
+        try {
+          writeFileSync(join(this.agentDir(oldId), 'identity.md'), this.identityText(oldAgent), 'utf8');
+        } catch { /* best-effort */ }
+      }
+
+      // Promote incoming orchestrator.
+      if (!target.isOrchestrator && target.role && target.role !== 'orchestrator' && target.role !== 'standby-orchestrator') {
+        target.previousRole = target.role;
+      }
+      target.isOrchestrator = true;
+      target.role = 'orchestrator';
+      target.onHold = false;
+      target.lastSeen = Date.now();
+      reg.orchestratorId = nextId;
+      try {
+        writeFileSync(join(this.agentDir(nextId), 'identity.md'), this.identityText(target), 'utf8');
+      } catch { /* best-effort */ }
+
+      this.atomicWriteJson(join(root, 'registry.json'), reg);
+
+      // Patch fleet.json immediately so HookServer's rosterContext() reflects the new boss on the very next turn.
+      const fleetPath = join(root, 'fleet.json');
+      if (existsSync(fleetPath)) {
+        try {
+          const fleet = this.readJson<{
+            agents?: Array<{ id?: string; role?: string; isOrchestrator?: boolean; onHold?: boolean }>;
+          }>(fleetPath, {});
+          if (Array.isArray(fleet.agents)) {
+            for (const row of fleet.agents) {
+              if (row.id === oldId && oldId !== nextId) {
+                row.isOrchestrator = false;
+                if (oldAgent?.role) row.role = oldAgent.role;
+                if (holdOutgoing) row.onHold = true;
+              } else if (row.id === nextId) {
+                row.isOrchestrator = true;
+                row.role = 'orchestrator';
+                row.onHold = false;
+              }
+            }
+            this.writeJson(fleetPath, fleet);
+          }
+        } catch { /* periodic fleet snapshot will repair */ }
+      }
+
+      // Migrate unread inbox messages from oldId -> nextId.
+      let migratedCount = 0;
+      if (migrateInbox && oldId !== nextId) {
+        const oldInbox = join(this.agentDir(oldId), 'inbox');
+        const oldDone = join(oldInbox, '.done');
+        const newInbox = join(this.agentDir(nextId), 'inbox');
+        if (existsSync(oldInbox)) {
+          try {
+            mkdirSync(oldDone, { recursive: true });
+            mkdirSync(newInbox, { recursive: true });
+            const files = readdirSync(oldInbox).filter((f) => f.endsWith('.json'));
+            for (const f of files) {
+              const srcPath = join(oldInbox, f);
+              try {
+                const raw = readFileSync(srcPath, 'utf8');
+                const msg = JSON.parse(raw) as HiveMessage;
+                const forwarded: HiveMessage = {
+                  ...msg,
+                  to: nextId,
+                  body: `[Forwarded from ${oldAgent?.name ?? oldId} (${oldId}) inbox on orchestrator promotion]\n\n${msg.body ?? ''}`
+                };
+                this.atomicWriteJson(join(newInbox, f), forwarded);
+                try { renameSync(srcPath, join(oldDone, f)); } catch { try { rmSync(srcPath, { force: true }); } catch { /* noop */ } }
+                migratedCount++;
+              } catch { /* skip unreadable file */ }
+            }
+          } catch { /* best-effort */ }
+        }
+      }
+
+      // Leave a non-waking stand-down note in the outgoing orchestrator's inbox.
+      if (oldAgent && oldId !== nextId) {
+        try {
+          const oldInbox = join(this.agentDir(oldId), 'inbox');
+          mkdirSync(oldInbox, { recursive: true });
+          const standDownMsg = this.normalize({
+            to: oldId,
+            act: 'inform',
+            requires_reply: false,
+            subject: `[Orchestrator Handover] ${target.name} (${nextId}) is now Orchestrator`,
+            body: [
+              `The operator has promoted "${target.name}" (${nextId}) to Orchestrator of this hive.`,
+              migratedCount > 0
+                ? `${migratedCount} unread message(s) from your inbox were forwarded to ${nextId} so in-flight work can continue without delay.`
+                : 'Your inbox was clear at the time of handover.',
+              'Stand down from floor management, task dispatch, and `board.md` edits until you are restored as Orchestrator.'
+            ].join('\n\n')
+          }, 'system');
+          this.atomicWriteJson(join(oldInbox, `${standDownMsg.id}.json`), standDownMsg);
+        } catch { /* best-effort */ }
+      }
+
+      // Dispatch the Orchestrator Charter + live handover digest to the newly promoted orchestrator.
+      const read = (p: string): string | null => {
+        try { return existsSync(p) ? readFileSync(p, 'utf8') : null; } catch { return null; }
+      };
+      const { text: handoffDigest } = godHandoffFit({
+        reasons: [`promoted from ${oldId}`],
+        previousSession: oldAgent?.sessionId ?? null,
+        contextTokens: null,
+        memory: read(join(this.agentDir(oldId), 'memory.md')),
+        floorDigest: read(join(root, 'floor-digest.md')),
+        boardStatus: read(join(root, 'board-status.md'))
+      }, 5500);
+
+      const isRestoringOriginal = !reg.previousOrchestratorId;
+      const charterLines = [
+        isRestoringOriginal
+          ? `You (${target.name}, \`${nextId}\`) have been **restored as the Orchestrator** of this hive (taking over from Acting Orchestrator "${oldAgent?.name ?? oldId}", \`${oldId}\`).`
+          : `You (${target.name}, \`${nextId}\`) have been **promoted to Acting Orchestrator** of this hive by the human (taking over from "${oldAgent?.name ?? oldId}", \`${oldId}\`).`,
+        '',
+        '### Orchestrator Charter (Effective Immediately)',
+        '1. **AWARENESS & TRIAGE**: You now run the floor. Drain your inbox continually, answer worker clarifications, and monitor the live team via `' + join(root, 'fleet.json') + '` and `' + join(root, 'registry.json') + '`.',
+        '2. **DELEGATE, DO NOT GRUNT-IMPLEMENT**: Decompose tasks and dispatch 4-part contracts (`OBJECTIVE`, `OUTPUT`, `TOOLS`, `BOUNDARIES`) to active workers via your `' + join(this.agentDir(nextId), 'outbox') + '`. Prefer existing idle/matching agents on the roster before spawning new ones.',
+        '3. **BOARD & LEDGER OWNERSHIP**: You are now the sole scribe of `' + join(root, 'board.md') + '` and manage `' + join(root, 'tasks.json') + '` (always set `"assignee"` when dispatching and use `"humanQA"` on `"blocked"` cards for human questions).',
+        this.orchestratorMaySpawn()
+          ? '4. **SPAWNING WORKERS**: You can spawn an ephemeral worker by writing `' + join(root, 'spawn-requests') + '/<id>.json` with `objective` and `cwd`.'
+          : '',
+        migratedCount > 0
+          ? `\n**Inbox Migration**: ${migratedCount} unread message(s) from ${oldAgent?.name ?? oldId}'s inbox have been moved into your inbox (\`${join(this.agentDir(nextId), 'inbox')}\`). Review and triage them now.`
+          : '',
+        handoffDigest ? `\n---\n${handoffDigest}` : ''
+      ].filter(Boolean).join('\n');
+
+      this.routeMessage(this.normalize({
+        to: nextId,
+        act: 'request',
+        requires_reply: false,
+        subject: isRestoringOriginal
+          ? `[Orchestrator Restored] You are back in command of the floor`
+          : `[Orchestrator Promotion] You are now Acting Orchestrator (taking over from ${oldAgent?.name ?? oldId})`,
+        body: charterLines
+      }, 'system'));
+
+      this.appendLog({
+        kind: 'orchestrator-promote',
+        orchestratorId: nextId,
+        oldOrchestratorId: oldId,
+        previousOrchestratorId: reg.previousOrchestratorId ?? null,
+        migratedCount,
+        holdOutgoing
+      });
+      this.commit(`hive: promote ${nextId} to orchestrator (from ${oldId})`);
+
+      return {
+        ok: true,
+        orchestratorId: nextId,
+        previousOrchestratorId: reg.previousOrchestratorId ?? null,
+        oldOrchestratorId: oldId,
+        migratedCount,
+        oldRoleRestored
+      };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }

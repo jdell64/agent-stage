@@ -43,9 +43,19 @@ const SIT_OFFSET = 5;
 const SIT_OFFSET_DOWN = 6;
 const SIT_OFFSET_UP = 5;   // up-facing: drop the body down onto the chair
 const SIT_OFFSET_SIDE = 4; // left/right: a smaller drop plus the sideways tuck
-// Pixels cropped off the bottom of the 32px sprite while seated.
-const SEAT_LEG_CROP = 3;
-const SEAT_BACK_CROP = 2;
+// Pixels cropped off the bottom of the 32px sprite while seated. Up-facing
+// seats trim just the feet so the back of the torso fills the chair; down and
+// side-facing seats crop the standing legs so the agent sits on the cushion
+// instead of dangling standing legs over the chair base.
+export const SEAT_LEG_CROP = 8;
+export const SEAT_SIDE_CROP = 7;
+export const SEAT_BACK_CROP = 2;
+
+export function seatedCropForDirection(dir: Direction): number {
+  if (dir === 'down') return SEAT_LEG_CROP;
+  if (dir === 'up') return SEAT_BACK_CROP;
+  return SEAT_SIDE_CROP;
+}
 
 // Idle 30/30 loop: between tasks an agent alternates roaming the floor with
 // resting at its own desk — for every IDLE_LINGER_SECONDS it spends lingering it
@@ -233,6 +243,10 @@ export class Character {
 
   getAnimation(): CharacterAnimation { return this.state; }
   getDeskTile(): { x: number; y: number } { return this.deskTile; }
+  setDesk(tile: { x: number; y: number }, direction: 'up' | 'down' | 'left' | 'right' = 'down'): void {
+    this.deskTile = tile;
+    this.seatDirection = direction;
+  }
   getPixelPosition(): { x: number; y: number } { return { x: this.px, y: this.py }; }
 
   getTilePosition(): { x: number; y: number } {
@@ -312,7 +326,7 @@ export class Character {
       case 'right': dx = SIT_OFFSET; dy = SIT_OFFSET_SIDE; break;
     }
     this.sprite.setPosition(this.px + dx, this.py + dy);
-    this.sprite.setSeatedCrop(dir === 'down' ? SEAT_LEG_CROP : SEAT_BACK_CROP);
+    this.sprite.setSeatedCrop(seatedCropForDirection(dir));
   }
 
   /** Sit on a café seat at the CURRENT tile, facing `dir`. The agent must have

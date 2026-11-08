@@ -387,6 +387,17 @@ export function useHive(config: HarnessConfig | null): void {
         if (typeof entry.role === 'string' && entry.role.trim()) roles[id] = entry.role.trim();
       }
       useStore.getState().syncDescriptionsFromRoles(roles);
+      useStore.getState().setPreviousOrchestratorId(reg.previousOrchestratorId ?? null);
+      if (reg.orchestratorId && useStore.getState().agents.some((a) => a.id === reg.orchestratorId)) {
+        const currentOrch = useStore.getState().agents.find((a) => a.isOrchestrator);
+        if (currentOrch?.id !== reg.orchestratorId) {
+          useStore.getState().promoteOrchestratorInStore(reg.orchestratorId, {
+            previousOrchestratorId: reg.previousOrchestratorId ?? null,
+            holdOutgoing: !!reg.agents?.[currentOrch?.id ?? 'orchestrator']?.onHold,
+            selectNew: false
+          });
+        }
+      }
       const { agents, archivedAgents } = useStore.getState();
       for (const a of [...agents, ...archivedAgents]) {
         const next = preferredAgentRole(a.description, roles[a.id], !!a.isOrchestrator);
@@ -396,6 +407,23 @@ export function useHive(config: HarnessConfig | null): void {
       }
     }).catch(() => { /* hive not ready yet */ });
   }, [config?.onboardingComplete]);
+
+  // 0b) Listen for orchestrator promotions/restorations triggered across IPC.
+  useEffect(() => {
+    if (!window.cth.onHiveOrchestratorChanged) return;
+    return window.cth.onHiveOrchestratorChanged((ev) => {
+      if (!ev.orchestratorId) return;
+      const st = useStore.getState();
+      const currentOrch = st.agents.find((a) => a.isOrchestrator);
+      if (currentOrch?.id === ev.orchestratorId && st.previousOrchestratorId === (ev.previousOrchestratorId ?? null)) {
+        return;
+      }
+      st.promoteOrchestratorInStore(ev.orchestratorId, {
+        previousOrchestratorId: ev.previousOrchestratorId ?? null,
+        oldRoleRestored: ev.oldRoleRestored
+      });
+    });
+  }, []);
 
   // 1) Bootstrap the orchestrator (source of truth = live PTYs, to dodge restarts).
   useEffect(() => {
@@ -426,6 +454,15 @@ export function useHive(config: HarnessConfig | null): void {
       // hardcoding DEFAULT_ORCHESTRATOR_NAME below — otherwise a custom name reverts on
       // every respawn even though the registry still has it right.
       const reg = await window.cth.hiveRegistry().catch(() => null);
+      const hasActingOrchestrator = !!(
+        reg?.previousOrchestratorId
+        && reg?.orchestratorId
+        && reg.orchestratorId !== ORCHESTRATOR_ID
+        && !reg.agents?.[reg.orchestratorId]?.archived
+      );
+      if (reg?.previousOrchestratorId) {
+        useStore.getState().setPreviousOrchestratorId(reg.previousOrchestratorId);
+      }
       // The active theme may suggest a name (copy.orchestratorName); learn it before the
       // first registration so it is the name that gets persisted.
       setThemeOrchestratorName(await window.cth.themeOrchestratorName().catch(() => null));
@@ -460,7 +497,15 @@ export function useHive(config: HarnessConfig | null): void {
         // the orchestrator's — was lost on every restart.
         resume: true,
         remoteControlSessionName: launchSessionName,
-        hive: { id: ORCHESTRATOR_ID, name: orchestratorName, provider: orchestratorProvider, command: command.trim(), cwd: config.harnessHome!, isOrchestrator: true, role: 'orchestrator' }
+        hive: {
+          id: ORCHESTRATOR_ID,
+          name: orchestratorName,
+          provider: orchestratorProvider,
+          command: command.trim(),
+          cwd: config.harnessHome!,
+          isOrchestrator: !hasActingOrchestrator,
+          role: hasActingOrchestrator ? 'standby-orchestrator' : 'orchestrator'
+        }
       });
       if (cancelled) { orchestratorSpawning.current = false; return; }
       if (!res.ok) { orchestratorSpawning.current = false; useStore.getState().setOrchestratorStatus('failed'); return; }
@@ -469,19 +514,22 @@ export function useHive(config: HarnessConfig | null): void {
         name: orchestratorName,
         character: restorePersistedCharacter(restoredLook?.character, ORCHESTRATOR_CHARACTER),
         accent: restoredLook?.accent ?? 'lemon',
-        description: 'Orchestrator — runs the floor, triages requests, escalates only critical calls to you',
+        description: hasActingOrchestrator
+          ? 'Standby Orchestrator — temporarily stepped down'
+          : 'Orchestrator — runs the floor, triages requests, escalates only critical calls to you',
         project: 'hive',
         tmuxTarget: '',
         cwd: config.harnessHome!,
         status: 'idle',
-        action: 'running the floor',
+        action: hasActingOrchestrator ? 'on standby' : 'running the floor',
         progress: 0,
         currentStation: 'desk',
         ptyId: ORCHESTRATOR_PTY,
         command: command.trim(),
         provider: orchestratorProvider,
         model: orchestratorModel,
-        isOrchestrator: true,
+        isOrchestrator: !hasActingOrchestrator,
+        onHold: hasActingOrchestrator ? (reg?.agents?.[ORCHESTRATOR_ID]?.onHold ?? true) : false,
         recentTextTs: Date.now()
       };
       useStore.getState().addAgent(orchestrator);
@@ -670,8 +718,9 @@ export function useHive(config: HarnessConfig | null): void {
         return;
       }
       seenTerminalHandoffs.current.add(msg.id);
+      const activeOrchestratorId = agents.find((a) => a.isOrchestrator)?.id ?? ORCHESTRATOR_ID;
       enqueueMessage(
-        ORCHESTRATOR_ID,
+        activeOrchestratorId,
         [
           `Terminal handoff failed for ${msg.to}: ${msg.subject}`,
           '',

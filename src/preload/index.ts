@@ -102,13 +102,17 @@ export interface VoiceMessage {
 
 export interface HiveRegistry {
   orchestratorId: string | null;
+  previousOrchestratorId?: string | null;
+  actingOrchestratorSince?: string | null;
   /** `archived` agents have had their terminal closed — retained + flagged, not
    *  deleted; only live-PTY agents are 'active'. */
   agents: Record<string, HiveAgentMeta & {
     status: string;
     lastSeen: number;
     archived?: boolean;
+    onHold?: boolean;
     sessionId?: string;
+    previousRole?: string;
   }>;
 }
 
@@ -764,6 +768,36 @@ const api = {
    *  keep running; the orchestrator is told to stop routing work to them. */
   hiveSetAgentHold: (id: string, hold: boolean): Promise<{ ok: boolean; onHold?: boolean; error?: string }> =>
     ipcRenderer.invoke('hive:setAgentHold', id, hold),
+  /** Temporarily promote a live worker to Acting Orchestrator, or restore the
+   *  original orchestrator. Moves unread inbox items, places a stand-down notice
+   *  for the outgoing orchestrator, and dispatches the Orchestrator Charter to the
+   *  newly promoted agent. */
+  hivePromoteOrchestrator: (
+    newAgentId: string,
+    opts?: { holdOutgoing?: boolean; migrateInbox?: boolean }
+  ): Promise<{
+    ok: boolean;
+    orchestratorId?: string;
+    previousOrchestratorId?: string | null;
+    oldOrchestratorId?: string;
+    migratedCount?: number;
+    oldRoleRestored?: string;
+    error?: string;
+  }> => ipcRenderer.invoke('hive:promoteOrchestrator', newAgentId, opts),
+  /** Subscribe to orchestrator promotions/restorations across windows. */
+  onHiveOrchestratorChanged: (
+    cb: (e: {
+      orchestratorId?: string;
+      previousOrchestratorId?: string | null;
+      oldOrchestratorId?: string;
+      migratedCount?: number;
+      oldRoleRestored?: string;
+    }) => void
+  ): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: Parameters<typeof cb>[0]) => cb(payload);
+    ipcRenderer.on('hive:orchestratorChanged', listener);
+    return () => ipcRenderer.removeListener('hive:orchestratorChanged', listener);
+  },
   hiveBoard: (): Promise<string> => ipcRenderer.invoke('hive:board'),
   hiveTasks: (): Promise<unknown> => ipcRenderer.invoke('hive:tasks'),
   hiveLog: (n?: number): Promise<unknown[]> => ipcRenderer.invoke('hive:log', n ?? 200),

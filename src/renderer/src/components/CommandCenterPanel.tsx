@@ -129,6 +129,11 @@ export function CommandCenterPanel({ agent, fullscreen = false }: { agent: Agent
   const updateAgent = useStore((s) => s.updateAgent);
   const setFullscreen = useStore((s) => s.setFullscreen);
   const fullscreenAgentId = useStore((s) => s.fullscreenAgentId);
+  const previousOrchestratorId = useStore((s) => s.previousOrchestratorId);
+  const previousOrchestrator = useStore((s) =>
+    s.previousOrchestratorId ? s.agents.find((a) => a.id === s.previousOrchestratorId) : undefined
+  );
+  const [restoringBoss, setRestoringBoss] = useState(false);
   const onPtyStream = usePtyParser(agent.id);
   // True only for the DOCKED panel while the overlay holds this agent.
   const isFullscreenedHere = fullscreenAgentId === agent.id && !fullscreen;
@@ -149,6 +154,25 @@ export function CommandCenterPanel({ agent, fullscreen = false }: { agent: Agent
     setFloorDeliveryPaused(next);
     const all = useStore.getState().agents;
     await Promise.all(all.map((a) => window.cth.controlAutoDelivery(a.id, next).catch(() => null)));
+  };
+  const restorePrimaryOrchestrator = async () => {
+    if (!previousOrchestratorId || restoringBoss) return;
+    setRestoringBoss(true);
+    try {
+      const res = await window.cth.hivePromoteOrchestrator(previousOrchestratorId, {
+        holdOutgoing: false,
+        migrateInbox: true
+      });
+      if (res.ok) {
+        useStore.getState().promoteOrchestratorInStore(previousOrchestratorId, {
+          previousOrchestratorId: null,
+          holdOutgoing: false,
+          oldRoleRestored: res.oldRoleRestored
+        });
+      }
+    } finally {
+      setRestoringBoss(false);
+    }
   };
 
   return (
@@ -181,6 +205,18 @@ export function CommandCenterPanel({ agent, fullscreen = false }: { agent: Agent
           }}>{t('commandCenter.title')}</div>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 1, minWidth: 0 }}>
             <PixelBadge status={agent.status} />
+            {previousOrchestratorId && previousOrchestratorId !== agent.id && (
+              <span
+                title={t('commandCenter.actingBadgeTitle')}
+                style={{
+                  fontFamily: 'var(--cth-font-display)', fontSize: 7, lineHeight: '11px',
+                  padding: '1px 4px', background: 'var(--cth-lemon)', color: 'var(--cth-on-accent)',
+                  boxShadow: 'inset 0 0 0 1px var(--cth-ink-700)', flexShrink: 0
+                }}
+              >
+                {t('commandCenter.actingBadge')}
+              </span>
+            )}
             <span style={{
               fontSize: 12, color: 'var(--cth-ink-500)',
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
@@ -191,6 +227,23 @@ export function CommandCenterPanel({ agent, fullscreen = false }: { agent: Agent
             agent's queue), and the IDE opens from agent level, not the toolbar.
             Short labels — the tooltips carry the full explanation. */}
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+          {previousOrchestrator && previousOrchestrator.id !== agent.id && (
+            <PixelButton
+              variant="secondary"
+              size="sm"
+              disabled={restoringBoss}
+              onClick={() => { void restorePrimaryOrchestrator(); }}
+            >
+              <span
+                className="cth-tip cth-tip-wrap"
+                data-tip={t('commandCenter.restoreOrchestratorTip', { name: previousOrchestrator.name, id: previousOrchestrator.id })}
+                aria-label={t('commandCenter.restoreOrchestratorAria', { name: previousOrchestrator.name })}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+              >
+                ↺ {t('commandCenter.restoreOrchestrator', { name: previousOrchestrator.name })}
+              </span>
+            </PixelButton>
+          )}
           <PixelButton
             variant={floorDeliveryPaused ? 'primary' : 'secondary'}
             size="sm"
@@ -745,6 +798,27 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
                   resuming the prior conversation (--resume), or starting fresh
                   when the provider doesn't support --resume or no session id was recorded. */}
               <span style={{ flex: 1 }} />
+              {!a.isAssistant && (
+                <PixelButton
+                  variant="secondary"
+                  size="sm"
+                  disabled={restarting === a.id}
+                  onClick={async () => {
+                    const res = await window.cth.hivePromoteOrchestrator(a.id, { holdOutgoing: true, migrateInbox: true });
+                    if (res.ok) {
+                      useStore.getState().promoteOrchestratorInStore(a.id, {
+                        previousOrchestratorId: res.previousOrchestratorId ?? null,
+                        holdOutgoing: true,
+                        oldRoleRestored: res.oldRoleRestored
+                      });
+                    }
+                  }}
+                >
+                  <span title={t('agentControl.promoteTip')}>
+                    ★ {t('agentControl.promote')}
+                  </span>
+                </PixelButton>
+              )}
               <PixelButton
                 variant={getTerminalExitState(a.ptyId).exited ? 'primary' : 'secondary'}
                 size="sm"

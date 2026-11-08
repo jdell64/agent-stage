@@ -83,6 +83,9 @@ export interface Agent {
   lastPrompt?: string;
   /** the orchestrator ("orchestrator") agent — seated in the orchestrator's room, runs the floor */
   isOrchestrator?: boolean;
+  /** Saved worker description before temporary promotion to orchestrator, restored
+   *  when the original orchestrator resumes command. */
+  previousDescription?: string;
   /** the orchestrator prep assistant — send-only; enriches prompts and forwards them to
    *  the orchestrator. Excluded from broadcast fan-out and from the restorable-dead sweep. */
   isAssistant?: boolean;
@@ -208,6 +211,20 @@ interface State {
   sidebarWidth: number;
   sidebarTab: SidebarTab;
   orchestratorStatus: OrchestratorStatus;
+  /** Original orchestrator id while another agent serves as acting orchestrator (null when normal). */
+  previousOrchestratorId: string | null;
+  setPreviousOrchestratorId: (id: string | null) => void;
+  /** Flip orchestrator authority in the store to `newAgentId`, move it to the head
+   *  of `agents`, and focus its Command Center panel. */
+  promoteOrchestratorInStore: (
+    newAgentId: string,
+    opts?: {
+      previousOrchestratorId?: string | null;
+      holdOutgoing?: boolean;
+      oldRoleRestored?: string;
+      selectNew?: boolean;
+    }
+  ) => void;
   /** Per-agent outgoing message queue (agent id → messages awaiting delivery).
    *  Lets the user keep "talking" to a busy agent: messages park here and are
    *  drained to the terminal one-by-one once the agent is free. */
@@ -279,6 +296,10 @@ interface State {
    *  on switch). OfficeFloor depends on this and rebuilds the scene on change. */
   officeTheme: ThemeId;
   setOfficeTheme: (theme: ThemeId) => void;
+  /** Bumped on theme rescan so OfficeFloor and SpritePortrait reload updated
+   *  on-disk theme pack assets without requiring a window reload. */
+  themeRevision: number;
+  bumpThemeRevision: () => void;
   /** Mirror of config.webhookTriggers — the inbound HTTP endpoints. Webhooks are
    *  editable from BOTH Settings → Connections and the Triggers tab, so neither
    *  surface keeps its own copy: both render off this list and both call the
@@ -700,6 +721,60 @@ export const useStore = create<State>((set, get) => ({
   sidebarWidth: initialSidebarWidth,
   sidebarTab: initialSidebarTab,
   orchestratorStatus: 'booting',
+  previousOrchestratorId: null,
+  setPreviousOrchestratorId: (id) => set({ previousOrchestratorId: id }),
+  promoteOrchestratorInStore: (newAgentId, opts) =>
+    set((s) => {
+      if (!s.agents.some((a) => a.id === newAgentId)) return s;
+      const holdOutgoing = opts?.holdOutgoing !== false;
+      const nextPreviousId = opts?.previousOrchestratorId !== undefined
+        ? opts.previousOrchestratorId
+        : (newAgentId === 'orchestrator' || newAgentId === s.previousOrchestratorId
+            ? null
+            : (s.previousOrchestratorId ?? s.agents.find((a) => a.isOrchestrator)?.id ?? 'orchestrator'));
+      const updated = s.agents.map((a) => {
+        if (a.id === newAgentId) {
+          const previousDescription = !a.isOrchestrator ? a.description : a.previousDescription;
+          return {
+            ...a,
+            isOrchestrator: true,
+            onHold: false,
+            previousDescription,
+            description: nextPreviousId
+              ? 'Acting Orchestrator — runs the floor, triages requests, escalates only critical calls to you'
+              : 'Orchestrator — runs the floor, triages requests, escalates only critical calls to you'
+          };
+        }
+        if (a.isOrchestrator) {
+          const restoredDesc = a.previousDescription
+            ?? opts?.oldRoleRestored
+            ?? (a.id === 'orchestrator' ? 'Standby Orchestrator — temporarily stepped down' : a.description);
+          return {
+            ...a,
+            isOrchestrator: false,
+            onHold: holdOutgoing ? true : a.onHold,
+            description: restoredDesc,
+            previousDescription: undefined
+          };
+        }
+        return a;
+      });
+      const promoted = updated.find((a) => a.id === newAgentId)!;
+      const rest = updated.filter((a) => a.id !== newAgentId);
+      const agents = [promoted, ...rest];
+      const selectedId = opts?.selectNew !== false ? newAgentId : s.selectedId;
+      const fullscreenAgentId = s.fullscreenAgentId && s.agents.find((a) => a.id === s.fullscreenAgentId)?.isOrchestrator
+        ? newAgentId
+        : s.fullscreenAgentId;
+      persistAgents(agents, selectedId);
+      return {
+        agents,
+        selectedId,
+        fullscreenAgentId,
+        previousOrchestratorId: nextPreviousId,
+        ccTabRequest: null
+      };
+    }),
   messageQueues: initialQueues,
   toolCounts: {},
   bumpToolCount: (id) =>
@@ -892,6 +967,8 @@ export const useStore = create<State>((set, get) => ({
   setHasOpenAiKey: (has) => set({ hasOpenAiKey: has }),
   officeTheme: 'office',
   setOfficeTheme: (theme) => set({ officeTheme: theme }),
+  themeRevision: 0,
+  bumpThemeRevision: () => set((s) => ({ themeRevision: s.themeRevision + 1 })),
   webhookTriggers: [],
   setWebhookTriggers: (list) => set({ webhookTriggers: list }),
   // A copy, not the shared DEFAULT_ORG_TRIGGER instance — main takes the same

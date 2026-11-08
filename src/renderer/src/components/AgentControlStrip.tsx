@@ -44,6 +44,7 @@ export function AgentControlStrip({ agentId }: { agentId: string }) {
   const [steer, setSteer] = useState('');
   const [note, setNote] = useState('');
   const [restarting, setRestarting] = useState(false);
+  const [promoting, setPromoting] = useState(false);
   const noteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -86,6 +87,27 @@ export function AgentControlStrip({ agentId }: { agentId: string }) {
       return;
     }
     flash(res.fellBackToFresh ? t('agentControl.flashRestartedFresh') : t('agentControl.flashRestarted'));
+  };
+  const promoteToBoss = async () => {
+    if (promoting || !agent || agent.isOrchestrator || agent.isAssistant) return;
+    setPromoting(true);
+    try {
+      const res = await window.cth.hivePromoteOrchestrator(agentId, { holdOutgoing: true, migrateInbox: true });
+      if (!res.ok) {
+        flash(res.error ?? 'Failed to promote');
+        return;
+      }
+      useStore.getState().promoteOrchestratorInStore(agentId, {
+        previousOrchestratorId: res.previousOrchestratorId ?? null,
+        holdOutgoing: true,
+        oldRoleRestored: res.oldRoleRestored
+      });
+      flash(t('agentControl.flashPromoted'));
+    } catch (e) {
+      flash(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPromoting(false);
+    }
   };
 
   return (
@@ -136,6 +158,17 @@ export function AgentControlStrip({ agentId }: { agentId: string }) {
               aria-label={t('commandCenter.restartContinue')}
             >
               {restarting ? t('common.restarting') : `↺ ${t('commandCenter.restartContinue')}`}
+            </span>
+          </PixelButton>
+        )}
+        {agent && !agent.isOrchestrator && !agent.isAssistant && (
+          <PixelButton variant="secondary" size="sm" onClick={() => { void promoteToBoss(); }} disabled={promoting}>
+            <span
+              className="cth-tip cth-tip-left cth-tip-wrap"
+              data-tip={t('agentControl.promoteTip')}
+              aria-label={t('agentControl.promoteAria')}
+            >
+              ★ {promoting ? t('agentControl.promoting') : t('agentControl.promote')}
             </span>
           </PixelButton>
         )}

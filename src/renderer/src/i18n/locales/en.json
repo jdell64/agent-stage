@@ -80,6 +80,11 @@
     "stopAfterStepAria": "Stop this agent after the current step",
     "steerTip": "Hands the agent a note at its next turn boundary. It does not interrupt what it is doing now, and nothing is typed into its terminal.",
     "steerAria": "Send this agent a note",
+    "promote": "promote to boss",
+    "promoting": "promoting…",
+    "promoteTip": "Temporarily promote this agent to Acting Orchestrator. Moves unread inbox messages from the current orchestrator, sends a stand-down notice, briefs this agent with the Orchestrator Charter, and unlocks Command Center tabs.",
+    "promoteAria": "Temporarily promote this agent to Orchestrator",
+    "flashPromoted": "promoted to Acting Orchestrator",
     "flashRestarted": "restarted & resumed conversation",
     "flashRestartedFresh": "restarted (no saved transcript — started fresh)"
   },
@@ -488,7 +493,12 @@
     "openIssue": "GitHub Issue #{{num}}: {{title}}",
     "deliveryResumeAria": "Resume automatic delivery for the whole floor",
     "deliveryHoldAria": "Hold automatic delivery for the whole floor",
-    "openIdeAria": "Open the IDE"
+    "openIdeAria": "Open the IDE",
+    "actingBadge": "ACTING",
+    "actingBadgeTitle": "Temporary Acting Orchestrator — click Restore when the primary orchestrator is ready again",
+    "restoreOrchestrator": "restore {{name}}",
+    "restoreOrchestratorTip": "Hand the floor and unread inbox back to {{name}} ({{id}})",
+    "restoreOrchestratorAria": "Restore {{name}} as Orchestrator"
   },
   "addAgent": {
     "title": "ADD AGENT",

@@ -3731,6 +3731,21 @@ ipcMain.handle('hive:setAgentHold', (_evt, id: unknown, hold: unknown) => {
   }
   return hive.setAgentHold(id, hold);
 });
+ipcMain.handle('hive:promoteOrchestrator', (_evt, newAgentId: unknown, opts: unknown) => {
+  if (typeof newAgentId !== 'string' || !newAgentId.trim()) {
+    return { ok: false, error: 'Invalid target agent id' };
+  }
+  const parsedOpts = opts && typeof opts === 'object'
+    ? (opts as { holdOutgoing?: boolean; migrateInbox?: boolean })
+    : undefined;
+  const res = hive.promoteOrchestrator(newAgentId, parsedOpts);
+  if (res.ok) {
+    for (const w of BrowserWindow.getAllWindows()) {
+      try { if (!w.isDestroyed()) w.webContents.send('hive:orchestratorChanged', res); } catch { /* gone */ }
+    }
+  }
+  return res;
+});
 ipcMain.handle('hive:board', () => hive.board());
 ipcMain.handle('hive:tasks', () => hive.tasks());
 ipcMain.handle('hive:log', (_evt, n: unknown) => hive.logTail(typeof n === 'number' ? n : 200));
@@ -5482,7 +5497,7 @@ function runWorkerWakeBeat(): void {
   const now = Date.now();
   const facts: WorkerWakeFacts[] = [];
   for (const [agentId, a] of Object.entries(reg.agents)) {
-    if (agentId === reg.orchestratorId || a?.archived) continue;
+    if (agentId === reg.orchestratorId || a?.archived || a?.onHold) continue;
     const ptyId = ptyForAgent(agentId);
     if (!ptyId) continue;
     const snap = control.snapshot(agentId);
