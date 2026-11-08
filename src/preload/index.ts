@@ -26,6 +26,8 @@ export type {
 } from '../shared/triggers';
 import type { PackSummary, PackPayload, Issue } from '../shared/themePack';
 export type { PackSummary, PackPayload, Issue } from '../shared/themePack';
+import type { HiveAnalyticsReport } from '../shared/agentAnalytics';
+export type { HiveAnalyticsReport } from '../shared/agentAnalytics';
 
 /** Renderer-visible integration record: the secretRef handle is redacted to a
  *  presence boolean. Matches main `integrations.listRecordsRedacted()` — the
@@ -801,6 +803,8 @@ const api = {
   hiveBoard: (): Promise<string> => ipcRenderer.invoke('hive:board'),
   hiveTasks: (): Promise<unknown> => ipcRenderer.invoke('hive:tasks'),
   hiveLog: (n?: number): Promise<unknown[]> => ipcRenderer.invoke('hive:log', n ?? 200),
+  /** Objective agent & model performance scorecards, category leaders, and fleet stats. */
+  hiveAnalytics: (): Promise<HiveAnalyticsReport> => ipcRenderer.invoke('hive:analytics'),
   hiveMemory: (id: string): Promise<string> => ipcRenderer.invoke('hive:memory', id),
   hiveInbox: (id: string): Promise<HiveMessage[]> => ipcRenderer.invoke('hive:inbox', id),
   /** Voice read-layer: recent message CONTENT (inbox/outbox bodies), REDACTED in

@@ -60,6 +60,7 @@ import { registerRealtimeActionIpc } from './realtimeActions';
 import { initCompletionWatcher } from './realtimeCompletionWatcher';
 import type { TaskCard, InboxMessage } from './realtimeCompletionWatcher';
 import { TelemetryCollector } from './telemetry';
+import { computeHiveAnalytics } from './agentAnalytics';
 import { CostLedgerTotals } from './costLifetime';
 import { IntegrationBroker } from './integrationBroker';
 import * as integrations from './integrations';
@@ -3749,6 +3750,7 @@ ipcMain.handle('hive:promoteOrchestrator', (_evt, newAgentId: unknown, opts: unk
 ipcMain.handle('hive:board', () => hive.board());
 ipcMain.handle('hive:tasks', () => hive.tasks());
 ipcMain.handle('hive:log', (_evt, n: unknown) => hive.logTail(typeof n === 'number' ? n : 200));
+ipcMain.handle('hive:analytics', () => computeHiveAnalytics(hive, telemetry));
 ipcMain.handle('hive:memory', (_evt, id: unknown) => (typeof id === 'string' ? hive.memory(id) : ''));
 ipcMain.handle('hive:inbox', (_evt, id: unknown) => (typeof id === 'string' ? hive.inbox(id) : []));
 // Voice read-layer: recent message CONTENT (inbox/outbox bodies), REDACTED
