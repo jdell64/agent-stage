@@ -1,16 +1,16 @@
 import { useEffect, useState } from 'react';
 import { resolveOrchestratorName, setThemeOrchestratorName, DEFAULT_ORCHESTRATOR_NAME } from '@shared/orchestratorIdentity';
+import { useStore } from '@/store/store';
 
 const ORCHESTRATOR_ID = 'orchestrator';
 
 /**
  * Orchestrator's persisted display name, for the boot screens shown BEFORE the store
  * has orchestrator's live agent object (so before `agent.name` exists anywhere to
- * read). Reads the registry directly, the same way useHive.ts's spawn effect
- * does, rather than assuming the default — otherwise a renamed orchestrator's own
- * "clocking in" screen would flash the wrong name every launch.
+ * read), and live-updated when another agent is promoted to acting orchestrator.
  */
 export function useResolvedOrchestratorName(): string {
+  const liveOrchestratorName = useStore((s) => s.agents.find((a) => a.isOrchestrator)?.name);
   const [orchestratorName, setOrchestratorName] = useState(DEFAULT_ORCHESTRATOR_NAME);
   useEffect(() => {
     let cancelled = false;
@@ -19,9 +19,14 @@ export function useResolvedOrchestratorName(): string {
       window.cth.themeOrchestratorName().catch(() => null)
     ]).then(([reg, themeName]) => {
       setThemeOrchestratorName(themeName);
-      if (!cancelled) setOrchestratorName(resolveOrchestratorName(reg?.agents?.[ORCHESTRATOR_ID]?.name));
+      const activeId = reg?.orchestratorId ?? ORCHESTRATOR_ID;
+      if (!cancelled) {
+        setOrchestratorName(
+          resolveOrchestratorName(reg?.agents?.[activeId]?.name ?? reg?.agents?.[ORCHESTRATOR_ID]?.name)
+        );
+      }
     }).catch(() => { /* keep the default while unknown */ });
     return () => { cancelled = true; };
   }, []);
-  return orchestratorName;
+  return liveOrchestratorName || orchestratorName;
 }

@@ -47,8 +47,13 @@ export function resolveOrchestratorName(
  *  router keeps accepting them (and the one-time migration renames state off them). */
 export const LEGACY_ORCHESTRATOR_IDS: readonly string[] = ['god'];
 
-/** True when `to` addresses the orchestrator by its current id, a legacy id, or
- *  the "human" proxy alias. */
+/** True when `to` addresses the orchestrator by its current id, the canonical
+ *  "orchestrator" role alias, a legacy id, or the "human" proxy alias. */
 export function isOrchestratorAddress(to: string, orchestratorId: string): boolean {
-  return to === 'human' || to === orchestratorId || LEGACY_ORCHESTRATOR_IDS.includes(to);
+  return (
+    to === 'orchestrator' ||
+    to === 'human' ||
+    to === orchestratorId ||
+    LEGACY_ORCHESTRATOR_IDS.includes(to)
+  );
 }

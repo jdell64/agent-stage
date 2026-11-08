@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { PixelButton } from './PixelButton';
 import { AgentHoldButton } from './AgentHoldButton';
 import { isComposingKey } from '@shared/imeGuard';
+import { useStore } from '@/store/store';
 
 /**
  * Operator control for one agent (#7C.1-7C.3) — pause (deny tools at the next
@@ -35,9 +36,11 @@ interface Snapshot {
 
 export function AgentControlStrip({ agentId }: { agentId: string }) {
   const { t } = useTranslation();
+  const agent = useStore((s) => s.agents.find((a) => a.id === agentId));
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [steer, setSteer] = useState('');
   const [note, setNote] = useState('');
+  const [promoting, setPromoting] = useState(false);
   const noteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -69,6 +72,27 @@ export function AgentControlStrip({ agentId }: { agentId: string }) {
     if (s) setSnap(s);
     setSteer('');
     flash(t('agentControl.flashSteer'));
+  };
+  const promoteToBoss = async () => {
+    if (promoting || !agent || agent.isOrchestrator || agent.isAssistant) return;
+    setPromoting(true);
+    try {
+      const res = await window.cth.hivePromoteOrchestrator(agentId, { holdOutgoing: true, migrateInbox: true });
+      if (!res.ok) {
+        flash(res.error ?? 'Failed to promote');
+        return;
+      }
+      useStore.getState().promoteOrchestratorInStore(agentId, {
+        previousOrchestratorId: res.previousOrchestratorId ?? null,
+        holdOutgoing: true,
+        oldRoleRestored: res.oldRoleRestored
+      });
+      flash(t('agentControl.flashPromoted'));
+    } catch (e) {
+      flash(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPromoting(false);
+    }
   };
 
   return (
@@ -106,6 +130,17 @@ export function AgentControlStrip({ agentId }: { agentId: string }) {
             the orchestrator — so the tooltip carries that distinction now that the
             grouping no longer does. */}
         <AgentHoldButton agentId={agentId} />
+        {agent && !agent.isOrchestrator && !agent.isAssistant && (
+          <PixelButton variant="secondary" size="sm" onClick={() => { void promoteToBoss(); }} disabled={promoting}>
+            <span
+              className="cth-tip cth-tip-left cth-tip-wrap"
+              data-tip={t('agentControl.promoteTip')}
+              aria-label={t('agentControl.promoteAria')}
+            >
+              ★ {promoting ? t('agentControl.promoting') : t('agentControl.promote')}
+            </span>
+          </PixelButton>
+        )}
         {/* v0.3.4: the auto-delivery switch moved to the orchestrator's Command Center
             header — ONE floor-wide control instead of a per-agent toggle. */}
         {snap?.autoDeliveryPaused && (

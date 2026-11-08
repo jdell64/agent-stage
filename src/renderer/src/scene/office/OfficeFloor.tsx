@@ -1644,6 +1644,43 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
         for (const id of Array.from(runtimes.keys())) {
           if (!present.has(id)) removeCharacter(id);
         }
+        // If orchestrator authority flipped between two live runtimes, swap their
+        // seats so the newly promoted orchestrator walks to `desk-ceo` (seat 0)
+        // and the outgoing orchestrator takes the worker desk.
+        const activeOrch = agents.find((a) => a.isOrchestrator);
+        const activeOrchRt = activeOrch ? runtimes.get(activeOrch.id) : undefined;
+        const forcedIds = new Set<string>();
+        if (activeOrch && activeOrchRt && activeOrchRt.seatIndex !== ORCHESTRATOR_SEAT) {
+          let holderId: string | undefined;
+          let holderRt: Runtime | undefined;
+          for (const [id, r] of runtimes.entries()) {
+            if (r.seatIndex === ORCHESTRATOR_SEAT && id !== activeOrch.id) {
+              holderId = id;
+              holderRt = r;
+              break;
+            }
+          }
+          const workerSeatIndex = activeOrchRt.seatIndex;
+          activeOrchRt.seatIndex = ORCHESTRATOR_SEAT;
+          seatClaims.add(ORCHESTRATOR_SEAT);
+          const ceoInfo = seatInfos[ORCHESTRATOR_SEAT];
+          const ceoTile = ceoInfo?.tile ?? mapRenderer.getSpawnPoint('entrance') ?? { x: 2, y: 2 };
+          activeOrchRt.waitTile = waitTiles[ORCHESTRATOR_SEAT % waitTiles.length];
+          activeOrchRt.character.setDesk(ceoTile, facingForSeat(ceoTile, ceoInfo?.name));
+          forcedIds.add(activeOrch.id);
+
+          if (holderRt && holderId) {
+            holderRt.seatIndex = workerSeatIndex;
+            const wInfo = workerSeatIndex != null ? seatInfos[workerSeatIndex] : undefined;
+            const wTile = wInfo?.tile ?? mapRenderer.getSpawnPoint('entrance') ?? { x: 2, y: 2 };
+            holderRt.waitTile = waitTiles[(workerSeatIndex ?? 0) % waitTiles.length];
+            holderRt.character.setDesk(wTile, facingForSeat(wTile, wInfo?.name));
+            const tmpScreen = activeOrchRt.screen;
+            activeOrchRt.screen = holderRt.screen;
+            holderRt.screen = tmpScreen;
+            forcedIds.add(holderId);
+          }
+        }
         for (const agent of agents) {
           const rt = runtimes.get(agent.id);
           if (!rt) void addCharacter(agent);
@@ -1658,7 +1695,7 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
               }).catch((err) => console.warn(`[office] could not load ${charName} sprite for ${agent.id}:`, err));
             }
             rt.character.setName(agent.name);
-            applyState(agent, rt);
+            applyState(agent, rt, forcedIds.has(agent.id));
           }
         }
       };
