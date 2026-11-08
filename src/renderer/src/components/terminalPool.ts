@@ -397,11 +397,6 @@ export function acquireTerminal(ptyId: string, theme?: ThemeMap, fontSize = 14):
         entry.lineBuf += ch;
       }
     }
-    // ONE message per input chunk, at the SUBMIT boundary — not per keystroke
-    // (that is what `pty:write` sees, and counting there would meter typing) and
-    // not per line inside a paste. This is the only place the renderer can cause
-    // an analytics event; it sends a surface name and nothing else.
-    if (submitted && !pasted) void window.cth.trackMessageSent('terminal');
     entry.inputDirty = entry.lineBuf.length > 0;
     // Re-stamped on every keystroke, so the staleness clock measures time since
     // the user last touched the draft — not since they started it.

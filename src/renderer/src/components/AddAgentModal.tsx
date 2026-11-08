@@ -17,8 +17,7 @@ import {
   OSS_LOCAL_PICKS,
   OSS_PROVIDER_PICKS,
   localSlugFor,
-  hasOssQuickPicks,
-  OSS_BLOG_LINKS
+  hasOssQuickPicks
 } from '@shared/ossModels';
 import {
   type AgentProvider,
@@ -991,18 +990,6 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                     {(provider === 'opencode' || provider === 'crush' || provider === 'pi' || provider === 'qwen') && (
                       <div style={{ fontSize: 12, color: 'var(--cth-ink-500)', lineHeight: '16px', margin: '2px 0 6px' }}>
                         {tr('addAgent.byokNote')}
-                        {' '}
-                        <a
-                          href={OSS_BLOG_LINKS.openModels}
-                          onClick={(e) => { e.preventDefault(); void window.cth.openExternal(OSS_BLOG_LINKS.openModels); }}
-                          style={ossLink}
-                        >{tr('addAgent.runOnOpenModels')}</a>
-                        {' '}
-                        <a
-                          href={OSS_BLOG_LINKS.macMini}
-                          onClick={(e) => { e.preventDefault(); void window.cth.openExternal(OSS_BLOG_LINKS.macMini); }}
-                          style={ossLink}
-                        >{tr('addAgent.setUpMacMini')}</a>.
                       </div>
                     )}
 
