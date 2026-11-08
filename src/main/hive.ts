@@ -44,6 +44,7 @@ import { MCP_CATALOG } from '../shared/mcpCatalog';
 import { selectBroadcastTargets } from '../shared/broadcast';
 import { preferredAgentRole } from '../shared/agentRole';
 import { mergeTaskLedger } from '../shared/taskLedger';
+import { classifyTaskCategory, type TaskCategory } from '../shared/agentAnalytics';
 import { expandTilde } from './fs';
 import { resolveOrchestratorName, isOrchestratorAddress } from '../shared/orchestratorIdentity';
 import { legacyOrchestratorIdIn, migrateRegistry, ORCHESTRATOR_ID } from '../shared/orchestratorMigration';
@@ -130,6 +131,12 @@ export interface HiveTask {
   dependsOn: string[];
   priority: number;
   createdAt: string;
+  /** ISO-8601 timestamp when the card first entered 'doing' (for cycle-time analytics). */
+  startedAt?: string;
+  /** ISO-8601 timestamp when the card reached 'done' (for cycle-time analytics). */
+  completedAt?: string;
+  /** Inferred or explicit domain category for agent strength scoring. */
+  category?: TaskCategory;
   /** First-class human feedback: the orchestrator appends {q} when a card can only
    *  proceed with the human's input (status goes blocked); the harness UI
    *  fills in {a}. The full history stays on the card forever. */
@@ -2348,7 +2355,14 @@ export class HiveManager {
     const ledger = this.tasks() as { tasks?: HiveTask[] };
     const tasks = Array.isArray(ledger?.tasks) ? ledger.tasks : [];
     if (tasks.some((current) => current?.id === task.id)) return false;
-    this.writeTasks([...tasks, task]);
+    const nowIso = new Date().toISOString();
+    const enriched: HiveTask = {
+      ...task,
+      category: task.category ?? classifyTaskCategory(task.title, task.description),
+      ...(task.status === 'doing' && !task.startedAt ? { startedAt: nowIso } : {}),
+      ...(task.status === 'done' && !task.completedAt ? { completedAt: nowIso } : {})
+    };
+    this.writeTasks([...tasks, enriched]);
     return true;
   }
 
@@ -2359,8 +2373,20 @@ export class HiveManager {
     const tasks = Array.isArray(ledger?.tasks) ? ledger.tasks : [];
     const index = tasks.findIndex((task) => task?.id === id);
     if (index < 0) return false;
+    const current = tasks[index];
+    const nowIso = new Date().toISOString();
+    const nextCard: HiveTask = { ...current, ...patch, id };
+    if (!nextCard.category && (nextCard.title || nextCard.description)) {
+      nextCard.category = classifyTaskCategory(nextCard.title, nextCard.description);
+    }
+    if (nextCard.status === 'doing' && !nextCard.startedAt) {
+      nextCard.startedAt = nowIso;
+    }
+    if (nextCard.status === 'done' && !nextCard.completedAt) {
+      nextCard.completedAt = nowIso;
+    }
     const next = tasks.slice();
-    next[index] = { ...tasks[index], ...patch, id };
+    next[index] = nextCard;
     this.writeTasks(next);
     return true;
   }

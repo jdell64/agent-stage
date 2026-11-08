@@ -12,6 +12,8 @@ import { TriggersTab } from './triggers/TriggersTab';
 import { TriggerHistoryTab } from './triggers/TriggerHistoryTab';
 import { WorkersTab } from './WorkersTab';
 import { SkillsTab } from './SkillsTab';
+import { AnalyticsTab } from './AnalyticsTab';
+import { recommendAgentForTask, type HiveAnalyticsReport } from '@shared/agentAnalytics';
 import { getTerminalExitState } from './terminalPool';
 import { restartAgentPty } from '@/utils/restartAgent';
 import { terminalInstanceKey } from './terminalRecovery';
@@ -50,7 +52,7 @@ import { useRtl } from '@/i18n/useDirection';
 // the old Schedules tab: schedules are now one of four trigger types, and the
 // whole surface lives in ./triggers (see src/shared/triggers.ts for the contract).
 type CCTab = 'terminal' | 'floor' | 'tasks' | 'human' | 'triggers' | 'trigger-history'
-  | 'memory' | 'graph' | 'activity' | 'skills' | 'workers';
+  | 'memory' | 'graph' | 'activity' | 'analytics' | 'skills' | 'workers';
 
 /** Fallback denominator for the per-agent token meter when no floor token budget
  *  is configured — so the bar reads as a budget estimate (filled + remaining)
@@ -78,6 +80,7 @@ const TABS: { key: CCTab; labelKey: string; icon: Parameters<typeof Icon>[0]['na
   { key: 'memory', labelKey: 'commandCenter.tabs.memory', icon: 'sparkle' },
   { key: 'graph', labelKey: 'commandCenter.tabs.graph', icon: 'web' },
   { key: 'activity', labelKey: 'commandCenter.tabs.activity', icon: 'bell' },
+  { key: 'analytics', labelKey: 'commandCenter.tabs.analytics', icon: 'ledger' },
   { key: 'skills', labelKey: 'commandCenter.tabs.skills', icon: 'sparkle' },
   { key: 'workers', labelKey: 'commandCenter.tabs.workers', icon: 'gear' }
 ];
@@ -118,7 +121,7 @@ export function CommandCenterPanel({ agent, fullscreen = false }: { agent: Agent
   // A task-detail "assign" pre-fills the Floor dispatch box and jumps to it.
   // Seeded via the store one-shot (the detail overlay lives app-wide now);
   // { seq } makes every assign distinct so identical text re-seeds.
-  const [dispatchSeed, setDispatchSeed] = useState<{ text: string; seq: number }>({ text: '', seq: 0 });
+  const [dispatchSeed, setDispatchSeed] = useState<{ text: string; suggestedOwnerId?: string; seq: number }>({ text: '', seq: 0 });
   const dispatchSeedRequest = useStore((s) => s.dispatchSeedRequest);
   useEffect(() => {
     if (!dispatchSeedRequest) return;
@@ -390,6 +393,18 @@ export function CommandCenterPanel({ agent, fullscreen = false }: { agent: Agent
           />
         )}
         {tab === 'activity' && <ActivityTab />}
+        {tab === 'analytics' && (
+          <AnalyticsTab
+            onSelectForDispatch={(agentId) => {
+              setDispatchSeed((prev) => ({
+                text: prev.text,
+                suggestedOwnerId: agentId,
+                seq: prev.seq + 1
+              }));
+              setTab('floor');
+            }}
+          />
+        )}
         {tab === 'skills' && <SkillsTab agentCwd={agent.cwd} />}
         {tab === 'workers' && <WorkersTab />}
       </div>
@@ -399,7 +414,7 @@ export function CommandCenterPanel({ agent, fullscreen = false }: { agent: Agent
 
 // ─── Floor tab — roster, model, dispatch, dirs, assistant ────────────────────
 
-function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
+function FloorTab({ seed }: { seed: { text: string; suggestedOwnerId?: string; seq: number } }) {
   useModelCatalogVersion(); // REFRESH-MODELS: re-render when the models file is refreshed
   const { t } = useTranslation();
   const rtl = useRtl();
@@ -428,6 +443,7 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
   const [dispatchTo, setDispatchTo] = useState<string>(''); // '' = the orchestrator decides
   const [dispatchText, setDispatchText] = useState('');
   const [dispatchMsg, setDispatchMsg] = useState<string | null>(null);
+  const [analyticsReport, setAnalyticsReport] = useState<HiveAnalyticsReport | null>(null);
   // ── ISSUES section state ──
   const [issueRepo, setIssueRepo] = useState<string>('');
   const [issues, setIssues] = useState<GHIssue[]>([]);
@@ -443,13 +459,17 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
       setEngineModel(c.orchestratorModel);
       setDefaultModel(c.defaultModel);
     }).catch(() => { /* noop */ });
+    window.cth.hiveAnalytics().then(setAnalyticsReport).catch(() => { /* noop */ });
   }, []);
 
-  // Seed the dispatch box from a task-card "assign" (keyed on seq so repeat
-  // assigns re-prefill). seq === 0 is the untouched initial state — skip it.
+  // Seed the dispatch box from a task-card "assign" or analytics selection
+  // (keyed on seq so repeat assigns re-prefill). seq === 0 is the untouched initial state — skip it.
   useEffect(() => {
-    if (seed.seq > 0) setDispatchText(seed.text);
-  }, [seed.seq, seed.text]);
+    if (seed.seq > 0) {
+      if (seed.text) setDispatchText(seed.text);
+      if (seed.suggestedOwnerId !== undefined) setDispatchTo(seed.suggestedOwnerId);
+    }
+  }, [seed.seq, seed.text, seed.suggestedOwnerId]);
 
   // Restart an agent's PTY in place. `resume:true` reattaches its prior Claude
   // conversation (`--resume <sessionId>`, resolved in the main process from the
@@ -576,11 +596,13 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
     sumRate += rate[a.id] ?? 0;
   }
   const fleetCachePct = sumInput > 0 ? Math.round((sumCacheRead / sumInput) * 100) : 0;
+  const liveWorkerIds = agents.filter((a) => !a.isOrchestrator).map((a) => a.id);
+  const dispatchRec = recommendAgentForTask(dispatchText, analyticsReport, liveWorkerIds);
 
   return (
     <Scroll>
       <Section title={t('commandCenter.dispatchViaOrchestrator', { orchestratorName: orchestratorName.toUpperCase() })}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
           <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 8, color: 'var(--cth-ink-500)', flexShrink: 0 }}>
             {t('commandCenter.suggestedOwner')}
           </span>
@@ -590,6 +612,28 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
               <option key={a.id} value={a.id}>{a.name}</option>
             ))}
           </Select>
+          {dispatchRec && dispatchTo !== dispatchRec.agentId && (
+            <button
+              onClick={() => setDispatchTo(dispatchRec.agentId)}
+              title={dispatchRec.rationale}
+              style={{
+                padding: '2px 6px',
+                border: 'none',
+                cursor: 'pointer',
+                background: 'var(--cth-mint)',
+                boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
+                fontFamily: 'var(--cth-font-ui)',
+                fontSize: 11,
+                color: 'var(--cth-ink-900)'
+              }}
+            >
+              ★ {t('analyticsTab.bestMatchBadge', {
+                category: t(`analyticsTab.categories.${dispatchRec.category}`),
+                name: dispatchRec.agentName,
+                score: dispatchRec.score
+              })}
+            </button>
+          )}
         </div>
         <textarea
           dir={rtl ? 'auto' : undefined}
