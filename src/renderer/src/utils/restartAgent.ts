@@ -57,7 +57,7 @@ function awaitSpawnWithAbort(
   if (!signal) return promise;
   if (signal.aborted) {
     return promise.then(async (result) => {
-      if (result.ok) await window.cth.killPty(ptyId, { preserveWorktree: true });
+      if (result.ok) await window.cth.killPty(ptyId, { preserveWorktree: true }).catch(() => undefined);
       throw new Error('restart cancelled');
     });
   }
@@ -71,7 +71,7 @@ function awaitSpawnWithAbort(
       if (settled) return;
       if (aborted || signal.aborted) {
         void (async () => {
-          if (result.ok) await window.cth.killPty(ptyId, { preserveWorktree: true });
+          if (result.ok) await window.cth.killPty(ptyId, { preserveWorktree: true }).catch(() => undefined);
           if (!settled) { settled = true; cleanup(); reject(new Error('restart cancelled')); }
         })();
         return;
