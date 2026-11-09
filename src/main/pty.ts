@@ -46,6 +46,7 @@ export interface PtyExitInfo {
   tail?: string;
   command?: string;
   cwd?: string;
+  owner?: WebContents | null;
 }
 
 interface PtySession {
@@ -344,6 +345,32 @@ export class PtyManager {
     this.webContents = wc;
   }
 
+  /** Internal session key scoped per floor window (`owner.id`) so two floors can
+   *  both run `pty-orchestrator` simultaneously without colliding in `sessions`. */
+  private sessionKey(id: string, owner?: WebContents | null): string {
+    const ownerId = owner?.id ?? this.webContents?.id ?? 0;
+    return ownerId > 0 ? `${ownerId}:${id}` : id;
+  }
+
+  private findSession(id: string, owner?: WebContents | null): { key: string; session: PtySession } | null {
+    if (owner) {
+      const k = this.sessionKey(id, owner);
+      const s = this.sessions.get(k);
+      if (s) return { key: k, session: s };
+    }
+    const direct = this.sessions.get(id);
+    if (direct && (!owner || direct.owner === owner)) return { key: id, session: direct };
+    const fallbackKey = this.sessionKey(id, null);
+    const fallback = this.sessions.get(fallbackKey);
+    if (fallback && (!owner || fallback.owner === owner)) return { key: fallbackKey, session: fallback };
+    if (!owner) {
+      for (const [k, s] of this.sessions.entries()) {
+        if (s.id === id) return { key: k, session: s };
+      }
+    }
+    return null;
+  }
+
   /** Count live PTYs owned by a given window — used to scope a floor's
    *  close-confirmation to its OWN terminals, not the whole app's. */
   countByOwner(wc: WebContents): number {
@@ -356,14 +383,14 @@ export class PtyManager {
    *  archive + worktree cleanup). Called when a floor window closes so its
    *  terminals don't linger as orphaned processes writing to a dead webContents. */
   killByOwner(wc: WebContents): void {
-    for (const [id, s] of [...this.sessions.entries()]) {
+    for (const [key, s] of [...this.sessions.entries()]) {
       if (s.owner === wc) {
         try {
           const pid = s.proc.pid;
           s.proc.kill();
           ensureKilled(pid);
         } catch { /* already gone */ }
-        void id;
+        this.sessions.delete(key);
       }
     }
   }
@@ -550,7 +577,8 @@ export class PtyManager {
   }
 
   spawn(opts: SpawnOptions, owner: WebContents | null = null): { ok: boolean; error?: string } {
-    if (this.sessions.has(opts.id)) {
+    const key = this.sessionKey(opts.id, owner);
+    if (this.sessions.has(key)) {
       return { ok: false, error: `pty already exists for id ${opts.id}` };
     }
     // Defense-in-depth: cwd is already tilde-expanded at ingestion (spawnAgentCore),
@@ -690,12 +718,12 @@ export class PtyManager {
         tail: '',
         owner
       };
-      this.sessions.set(opts.id, session);
+      this.sessions.set(key, session);
 
       proc.onData((data) => {
         // Drop trailing output from a process whose id was already reclaimed by
         // a respawn (or killed) — it would corrupt the new session's screen.
-        if (this.sessions.get(opts.id) !== session) return;
+        if (this.sessions.get(key) !== session) return;
         session.hasOutput = true;
         session.lastOutputAt = Date.now();
         // Keep only the trailing window; slice AFTER appending so a single
@@ -707,9 +735,9 @@ export class PtyManager {
       proc.onExit(({ exitCode, signal }) => {
         // Stale exit from a process whose id was reclaimed (kill()+respawn) — do
         // NOT touch the live session or tell the renderer the new pty died.
-        if (this.sessions.get(opts.id) !== session) return;
+        if (this.sessions.get(key) !== session) return;
         this.safeSend(`pty:exit:${opts.id}`, { exitCode, signal }, session.owner);
-        this.sessions.delete(opts.id);
+        this.sessions.delete(key);
         // Natural exit must run the same lifecycle teardown as an explicit kill.
         // Guarded so a teardown error can never crash node-pty's exit callback.
         // `signal` is forwarded, not dropped: a provider killed by SIGILL/SIGSEGV
@@ -724,7 +752,8 @@ export class PtyManager {
             signal,
             tail: session.tail,
             command: session.command,
-            cwd: session.cwd
+            cwd: session.cwd,
+            owner: session.owner
           });
         } catch { /* never throw out of onExit */ }
       });
@@ -735,22 +764,22 @@ export class PtyManager {
     }
   }
 
-  write(id: string, data: string): { ok: boolean; error?: string } {
-    const s = this.sessions.get(id);
-    if (!s) return { ok: false, error: `no pty: ${id}` };
+  write(id: string, data: string, owner?: WebContents | null): { ok: boolean; error?: string } {
+    const found = this.findSession(id, owner);
+    if (!found) return { ok: false, error: `no pty: ${id}` };
     try {
-      s.proc.write(data);
+      found.session.proc.write(data);
       return { ok: true };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   }
 
-  resize(id: string, cols: number, rows: number): { ok: boolean; error?: string } {
-    const s = this.sessions.get(id);
-    if (!s) return { ok: false, error: `no pty: ${id}` };
+  resize(id: string, cols: number, rows: number, owner?: WebContents | null): { ok: boolean; error?: string } {
+    const found = this.findSession(id, owner);
+    if (!found) return { ok: false, error: `no pty: ${id}` };
     try {
-      s.proc.resize(cols, rows);
+      found.session.proc.resize(cols, rows);
       return { ok: true };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
@@ -760,33 +789,36 @@ export class PtyManager {
   /** Ask the foreground TUI for a fresh frame without changing its geometry.
    *  Startup output may predate the renderer subscription, and a same-sized
    *  first fit otherwise emits no resize. */
-  redraw(id: string): { ok: boolean; error?: string } {
-    const s = this.sessions.get(id);
-    if (!s) return { ok: false, error: `no pty: ${id}` };
+  redraw(id: string, owner?: WebContents | null): { ok: boolean; error?: string } {
+    const found = this.findSession(id, owner);
+    if (!found) return { ok: false, error: `no pty: ${id}` };
     try {
-      s.proc.resize(s.proc.cols, s.proc.rows);
+      found.session.proc.resize(found.session.proc.cols, found.session.proc.rows);
       return { ok: true };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   }
 
-  kill(id: string): { ok: boolean; error?: string } {
-    const s = this.sessions.get(id);
-    if (!s) return { ok: false, error: `no pty: ${id}` };
+  kill(id: string, owner?: WebContents | null): { ok: boolean; error?: string } {
+    const found = this.findSession(id, owner);
+    if (!found) return { ok: false, error: `no pty: ${id}` };
     try {
-      const pid = s.proc.pid;
-      s.proc.kill();
+      const pid = found.session.proc.pid;
+      found.session.proc.kill();
       ensureKilled(pid); // verify + sweep the process group so no PID leaks
-      this.sessions.delete(id);
+      this.sessions.delete(found.key);
       return { ok: true };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   }
 
-  list(): Array<{ id: string; cwd: string; command: string; pid: number; lastOutputAt: number; hasOutput: boolean }> {
-    return Array.from(this.sessions.values()).map(s => ({
+  list(owner?: WebContents | null): Array<{ id: string; cwd: string; command: string; pid: number; lastOutputAt: number; hasOutput: boolean }> {
+    const values = owner
+      ? Array.from(this.sessions.values()).filter((s) => s.owner === owner || (!s.owner && owner === this.webContents))
+      : Array.from(this.sessions.values());
+    return values.map(s => ({
       id: s.id,
       cwd: s.cwd,
       command: s.command,
@@ -797,15 +829,15 @@ export class PtyManager {
   }
 
   /** Epoch ms of this PTY's most recent output, or undefined if no such PTY. */
-  lastOutputAt(id: string): number | undefined {
-    return this.sessions.get(id)?.lastOutputAt;
+  lastOutputAt(id: string, owner?: WebContents | null): number | undefined {
+    return this.findSession(id, owner)?.session.lastOutputAt;
   }
 
   /** Milliseconds since this PTY last produced output (Date.now() - lastOutputAt),
    *  or undefined if no such PTY. The idle handshake: large value = safe to type. */
-  idleFor(id: string): number | undefined {
-    const s = this.sessions.get(id);
-    return s ? Date.now() - s.lastOutputAt : undefined;
+  idleFor(id: string, owner?: WebContents | null): number | undefined {
+    const found = this.findSession(id, owner);
+    return found ? Date.now() - found.session.lastOutputAt : undefined;
   }
 
   /** Bulk-kill every PTY for app quit / reset. This is wholesale shutdown, not

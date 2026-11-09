@@ -35,6 +35,9 @@ import { useHoldOptionToTalk } from '@/freeflow/holdOption';
 import brandLogo from '@brand/logo.png?url';
 import { DEFAULT_THEME_ID } from '@shared/themePack';
 import { readViewScreenCollapsed, writeViewScreenCollapsed } from '@/components/viewScreenPreference';
+import { FloorRail } from '@/components/FloorRail';
+import { FloorsModal } from '@/components/FloorsModal';
+import type { FloorAgentPreview, FloorsSnapshot } from '@shared/floors';
 
 // Injected at build time from package.json (see electron.vite.config.ts).
 declare const __APP_VERSION__: string;
@@ -88,6 +91,55 @@ export function App() {
     setViewScreenCollapsed(next);
     writeViewScreenCollapsed(next);
   };
+
+  const [floorsModalOpen, setFloorsModalOpen] = useState(false);
+  const [floorsSnapshot, setFloorsSnapshot] = useState<FloorsSnapshot | null>(null);
+
+  // Subscribe to multi-window floors snapshot
+  useEffect(() => {
+    let active = true;
+    if (window.cth?.floors?.list) {
+      window.cth.floors.list().then((snap) => {
+        if (active) setFloorsSnapshot(snap);
+      }).catch(() => { /* ignore */ });
+    }
+    const unsub = window.cth?.floors?.onChanged?.((snap) => {
+      if (active) setFloorsSnapshot(snap);
+    });
+    return () => {
+      active = false;
+      unsub?.();
+    };
+  }, []);
+
+  // Sync this window's live agent lineup to main for the Tower Overview and Discord Rail
+  useEffect(() => {
+    if (!window.cth?.floors?.reportAgents) return;
+    const previews: FloorAgentPreview[] = agents.map((a) => ({
+      id: a.id,
+      name: a.name,
+      character: a.character,
+      status: a.status,
+      isOrchestrator: a.isOrchestrator
+    }));
+    void window.cth.floors.reportAgents(previews);
+  }, [agents]);
+
+  // Global hotkeys for Building Tower (Ctrl+B / Cmd+B) and New Floor (Ctrl+Shift+N / Cmd+Shift+N)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const isMeta = e.ctrlKey || e.metaKey;
+      if (isMeta && !e.shiftKey && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        setFloorsModalOpen((v) => !v);
+      } else if (isMeta && e.shiftKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        void window.cth?.floors?.open?.();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // Deep link into Settings from anywhere in the tree. Settings' open state is
   // local to App, so a nested control (e.g. "set it now" beside a disabled Talk
@@ -310,6 +362,50 @@ export function App() {
           alt="Agent Stage"
           style={{ height: 20, width: 'auto', display: 'block' }}
         />
+        {/* Floor breadcrumb & live isolated status */}
+        {floorsSnapshot && (
+          <div style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+            fontFamily: 'var(--cth-font-mono)',
+            fontSize: 11
+          }}>
+            <span style={{ color: 'var(--cth-ink-300)' }}>/</span>
+            <span style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              fontWeight: 700,
+              color: 'var(--cth-ink-900)'
+            }}>
+              <span style={{
+                width: 7, height: 7, borderRadius: '50%',
+                background: (floorsSnapshot.floors.find((f) => f.floorNumber === floorsSnapshot.currentFloorNumber)?.workingCount ?? 0) > 0 ? '#10b981' : '#9ca3af'
+              }} />
+              Floor {floorsSnapshot.currentFloorNumber}:
+            </span>
+            <span style={{ color: 'var(--cth-ink-700)', fontWeight: 600 }}>
+              {floorsSnapshot.floors.find((f) => f.floorNumber === floorsSnapshot.currentFloorNumber)?.folderName ?? 'Workspace'}
+            </span>
+            {floorsSnapshot.floors.find((f) => f.floorNumber === floorsSnapshot.currentFloorNumber)?.displayPath && (
+              <span style={{ color: 'var(--cth-ink-500)', fontSize: 10 }}>
+                {floorsSnapshot.floors.find((f) => f.floorNumber === floorsSnapshot.currentFloorNumber)?.displayPath}
+              </span>
+            )}
+            <span style={{
+              padding: '1px 6px',
+              borderRadius: 3,
+              fontSize: 10,
+              fontWeight: 600,
+              background: '#fef3c7',
+              color: '#92400e',
+              border: '1px solid #fcd34d'
+            }}>
+              {floorsSnapshot.floors.find((f) => f.floorNumber === floorsSnapshot.currentFloorNumber)?.workingCount ?? 0} working (Isolated PTY)
+            </span>
+          </div>
+        )}
         {/* v0.3.7: the version is no longer inert text — it doubles as the
             update control (check / download / restart to update). */}
         <UpdateBadge />
@@ -320,6 +416,51 @@ export function App() {
         }}>
           {config.autoMode ? 'auto mode on' : 'auto mode off'}
         </span>
+        {/* Building Tower quick-open button in Titlebar */}
+        <button
+          className="cth-titlebar-nodrag cth-tip"
+          onClick={() => setFloorsModalOpen(true)}
+          data-tip="Building Tower (Ctrl+B)"
+          aria-label="Building Tower"
+          style={{
+            marginLeft: 'auto',
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            height: 26, padding: '0 8px',
+            background: 'var(--cth-paper-100)',
+            boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
+            border: 'none', borderRadius: 2, cursor: 'pointer',
+            color: 'var(--cth-ink-900)', fontSize: 11, fontWeight: 600,
+            fontFamily: 'var(--cth-font-ui)'
+          }}
+        >
+          <span style={{ fontSize: 12 }}>🏢</span> Building Tower
+        </button>
+        {/* STOP ALL floor-scoped button */}
+        <button
+          className="cth-titlebar-nodrag cth-tip"
+          onClick={async () => {
+            const currentWorking = floorsSnapshot?.floors.find(
+              (f) => f.floorNumber === (floorsSnapshot?.currentFloorNumber ?? 1)
+            )?.workingCount ?? 0;
+            if (currentWorking === 0) return;
+            if (window.confirm(`Stop all working agents on Floor ${floorsSnapshot?.currentFloorNumber ?? 1}?`)) {
+              await window.cth?.floors?.stopAll?.();
+            }
+          }}
+          data-tip="Stop all agents on current floor"
+          aria-label="Stop all agents"
+          style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            height: 26, padding: '0 8px',
+            background: '#fee2e2',
+            boxShadow: 'inset 0 0 0 1px #f87171',
+            border: 'none', borderRadius: 2, cursor: 'pointer',
+            color: '#991b1b', fontSize: 10, fontWeight: 700,
+            fontFamily: 'var(--cth-font-mono)'
+          }}
+        >
+          STOP ALL
+        </button>
         {/* v0.3.4: theme + fullscreen live HERE (top right), not buried in the
             terminal header — and the theme darkens the whole app, terminals
             included (design/theme.ts + tokens.css dark block). */}
@@ -343,7 +484,6 @@ export function App() {
           data-tip={appThemeNow === 'dark' ? 'Light theme' : 'Dark theme'}
           aria-label="Toggle dark mode"
           style={{
-            marginLeft: 'auto',
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
             width: 28, height: 28, padding: 0,
             background: 'var(--cth-paper-100)',
@@ -402,12 +542,23 @@ export function App() {
 
       </div>
 
-      <div style={{
-        flex: 1, minHeight: 0,
-        display: 'flex',
-        padding: 16,
-        gap: 0
-      }}>
+      {/* Main app body with Discord-style FloorRail on the far left */}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
+        <FloorRail
+          snapshot={floorsSnapshot}
+          onOpenTower={() => setFloorsModalOpen(true)}
+          onSelectFloor={(num) => { void window.cth?.floors?.focus?.(num); }}
+          onOpenRecentInNewFloor={(path) => { void window.cth?.floors?.open?.(path); }}
+          onNewFloor={() => { void window.cth?.floors?.open?.(); }}
+        />
+
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          <div style={{
+            flex: 1, minHeight: 0,
+            display: 'flex',
+            padding: 16,
+            gap: 0
+          }}>
         <div style={{
           flex: viewScreenCollapsed ? '0 0 42px' : 1,
           minHeight: 0, minWidth: 0, position: 'relative',
@@ -530,6 +681,26 @@ export function App() {
       </div>
 
       <AgentStrip config={config} />
+        </div>
+      </div>
+
+      {floorsModalOpen && (
+        <FloorsModal
+          snapshot={floorsSnapshot}
+          onClose={() => setFloorsModalOpen(false)}
+          onSelectFloor={(num) => {
+            setFloorsModalOpen(false);
+            void window.cth?.floors?.focus?.(num);
+          }}
+          onNewFloor={(initialHome) => {
+            setFloorsModalOpen(false);
+            void window.cth?.floors?.open?.(initialHome);
+          }}
+          onCloseFloor={(num) => {
+            void window.cth?.floors?.close?.(num);
+          }}
+        />
+      )}
 
       {addAgentOpen && (
         <AddAgentModal

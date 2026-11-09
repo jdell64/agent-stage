@@ -18,7 +18,7 @@ import {
   readConfig, writeConfig, setAgentTokenCap, resetConfig, onConfigWritten, ensureHarnessHome, ensureClaudePermissionsAccepted,
   modelForHiveSpawn, OPS_STANDUP_MISSION, HEARTBEAT_MISSION, COMPACT_MAINTENANCE_MISSION, type HarnessConfig, type ScheduledMission
 } from './config';
-import { listDir, readFileText, readFileBinary, writeFileText, statAbs, expandTilde } from './fs';
+import { listDir, readFileText, readFileBinary, writeFileText, statAbs, expandTilde, normalizeHiveHome } from './fs';
 import { normalizeWeekly, weeklyDelayMs } from '../shared/weeklySchedule';
 import {
   getBranch, getStatus, getLog, getBranches, getAheadBehind, isRepo, getDiff, mainRepoRoot,
@@ -103,6 +103,19 @@ import {
   type FloorState, type StandupDecision, type StandupSkipRecord
 } from './standupDelta';
 import { billedEquivalentTokens, rawTokens } from '../shared/tokenWeights';
+import {
+  countWorkingAgents,
+  deriveFloorShortTag,
+  extractFolderName,
+  findFloorByHome,
+  formatFloorWindowTitle,
+  nextFloorNumber,
+  normalizeHivePath,
+  shortenHomePath,
+  type FloorAgentPreview,
+  type FloorSummary,
+  type FloorsSnapshot
+} from '../shared/floors';
 
 // Dev isolation: apply MD_USER_DATA_DIR early before config, db, or hive initialize
 if (process.env.MD_USER_DATA_DIR && typeof process.env.MD_USER_DATA_DIR === 'string') {
@@ -387,6 +400,231 @@ const allWindows = new Set<BrowserWindow>();
  *  isolated from every other window's. */
 let floorSeq = 0;
 
+/** Per-window Floor runtime context so secondary Floor windows have their own
+ *  isolated hive folder, roster, hook pipe, memory palace, and agent lineup. */
+interface FloorRuntime {
+  floorNumber: number;
+  win: BrowserWindow;
+  wcId: number;
+  isPrimary: boolean;
+  home: string | null;
+  hive: HiveManager;
+  roster: RosterStore;
+  control: ControlRegistry;
+  breaker: CircuitBreaker;
+  hookServer: HookServer;
+  memory: MemoryManager;
+  reflector: MemoryReflector;
+  ptyToAgent: Map<string, string>;
+  reportedAgents: FloorAgentPreview[];
+}
+
+const floorsByWcId = new Map<number, FloorRuntime>();
+
+function createSecondaryFloorRuntime(win: BrowserWindow, floorNumber: number, initialHome: string | null): FloorRuntime {
+  const wc = win.webContents;
+  const wcId = wc.id;
+  const runtimeRef: { current: FloorRuntime | null } = { current: null };
+  const getHome = () => runtimeRef.current?.home ?? null;
+
+  const floorHive = new HiveManager(
+    getHome,
+    (channel, payload) => {
+      if (wc.isDestroyed()) return false;
+      try { wc.send(channel, payload); return true; } catch { return false; }
+    }
+  );
+  floorHive.keepAppendFilesOpen(true);
+
+  const floorRoster = new RosterStore(getHome);
+  const floorControl = new ControlRegistry();
+  const floorBreaker = new CircuitBreaker(() => {
+    const c = readConfig();
+    return {
+      ...(c.circuitBreaker ?? {}),
+      costCapUsd: c.costCapUsd,
+      costCapTokens: c.costCapTokens,
+      agentTokenCaps: c.agentTokenCaps
+    };
+  });
+
+  const standingGoal = (agentId: string): string | null => {
+    const snap = floorRoster.read();
+    if (!snap || !Array.isArray(snap.agents)) return null;
+    for (const entry of snap.agents) {
+      if (!entry || typeof entry !== 'object') continue;
+      const a = entry as { id?: unknown; goal?: unknown };
+      if (a.id !== agentId) continue;
+      return typeof a.goal === 'string' && a.goal.trim() ? a.goal.trim() : null;
+    }
+    return null;
+  };
+
+  const floorHookServer = new HookServer(
+    floorHive,
+    () => (wc.isDestroyed() ? null : wc),
+    () => readConfig(),
+    floorControl,
+    floorBreaker,
+    standingGoal
+  );
+  floorHookServer.setHeavyLock(heavyLock);
+
+  const floorMemory = new MemoryManager(
+    getHome,
+    () => {
+      const c = readConfig();
+      return { enabled: c.semanticMemory !== false, model: c.embeddingModel ?? 'minilm' };
+    }
+  );
+
+  const floorReflector = new MemoryReflector(
+    getHome,
+    () => readConfig().defaultCommand ?? 'claude',
+    () => floorMemory.env(),
+    reflectSettings,
+    (event) => { try { floorHive.appendLog(event); } catch { /* best-effort */ } }
+  );
+
+  const rt: FloorRuntime = {
+    floorNumber,
+    win,
+    wcId,
+    isPrimary: false,
+    home: initialHome ? resolve(expandTilde(initialHome)) : null,
+    hive: floorHive,
+    roster: floorRoster,
+    control: floorControl,
+    breaker: floorBreaker,
+    hookServer: floorHookServer,
+    memory: floorMemory,
+    reflector: floorReflector,
+    ptyToAgent: new Map<string, string>(),
+    reportedAgents: []
+  };
+  runtimeRef.current = rt;
+  return rt;
+}
+
+function bootstrapSecondaryFloorServices(rt: FloorRuntime): void {
+  if (rt.isPrimary || !rt.hive.enabled()) return;
+  try {
+    rt.hive.ensureHive();
+    rt.hive.refreshGeneratedDocs();
+    rt.hive.setRuntimeInfo({ version: app.getVersion(), packaged: app.isPackaged, appPath: app.getAppPath() });
+    rt.hive.setOrchestratorMaySpawn(readConfig().orchestratorMaySpawn === true);
+    rt.hive.appendLog({
+      kind: 'app-start',
+      version: app.getVersion(),
+      packaged: app.isPackaged,
+      appPath: app.getAppPath(),
+      exePath: process.execPath,
+      electron: process.versions.electron,
+      platform: process.platform
+    });
+    rt.control.replaceAutoDeliveryPauses(readConfig().autoDeliveryPausedAgents ?? []);
+    rt.hive.startRouter();
+    rt.hookServer.start();
+    rt.memory.start();
+    rt.reflector.start();
+  } catch (e) {
+    console.error(`[floors] bootstrap failed for floor ${rt.floorNumber}:`, e);
+  }
+}
+
+function stopSecondaryFloorServices(rt: FloorRuntime): void {
+  if (rt.isPrimary) return;
+  try { rt.hive.stopRouter(); } catch { /* noop */ }
+  try { rt.hookServer.stop(); } catch { /* noop */ }
+  try { rt.memory.stop(); } catch { /* noop */ }
+  try { rt.reflector.stop(); } catch { /* noop */ }
+  try { rt.hive.stopAllProxyBridges(); } catch { /* noop */ }
+  try { rt.hive.closeAppendFiles(); } catch { /* noop */ }
+}
+
+function floorForWebContents(wc?: Electron.WebContents | null): FloorRuntime | null {
+  if (wc) {
+    const found = floorsByWcId.get(wc.id);
+    if (found) return found;
+  }
+  for (const rt of floorsByWcId.values()) {
+    if (rt.isPrimary) return rt;
+  }
+  return floorsByWcId.values().next().value ?? null;
+}
+
+function summarizeFloor(rt: FloorRuntime): FloorSummary {
+  const home = rt.isPrimary ? (process.env.MD_HIVE_ROOT || readConfig().harnessHome || rt.home) : rt.home;
+  let agents: FloorAgentPreview[] = rt.reportedAgents;
+  if (agents.length === 0 && home) {
+    try {
+      const snap = rt.roster.read();
+      if (snap && Array.isArray(snap.agents)) {
+        agents = snap.agents
+          .filter((a): a is Record<string, unknown> => !!a && typeof a === 'object')
+          .map((a) => ({
+            id: typeof a.id === 'string' ? a.id : 'agent',
+            name: typeof a.name === 'string' ? a.name : 'Agent',
+            character: typeof a.character === 'string' ? a.character : 'michael',
+            status: typeof a.status === 'string' ? a.status : 'idle',
+            isOrchestrator: Boolean(a.isOrchestrator)
+          }));
+      }
+    } catch { /* ignore */ }
+  }
+  return {
+    floorNumber: rt.floorNumber,
+    webContentsId: rt.wcId,
+    home,
+    folderName: extractFolderName(home),
+    shortTag: deriveFloorShortTag(home, rt.floorNumber),
+    displayPath: shortenHomePath(home, homedir()),
+    agentCount: agents.length,
+    workingCount: countWorkingAgents(agents),
+    agents: agents.slice(0, 8)
+  };
+}
+
+function listFloorSummaries(): FloorSummary[] {
+  return [...floorsByWcId.values()]
+    .filter((rt) => !rt.win.isDestroyed())
+    .sort((a, b) => a.floorNumber - b.floorNumber)
+    .map(summarizeFloor);
+}
+
+function syncFloorWindowTitles(): void {
+  const summaries = listFloorSummaries();
+  const total = summaries.length;
+  for (const rt of floorsByWcId.values()) {
+    if (rt.win.isDestroyed()) continue;
+    const home = rt.isPrimary ? (process.env.MD_HIVE_ROOT || readConfig().harnessHome || rt.home) : rt.home;
+    try {
+      rt.win.setTitle(formatFloorWindowTitle(rt.floorNumber, total, home));
+    } catch { /* window closing */ }
+  }
+}
+
+function getFloorsSnapshotFor(wc?: Electron.WebContents | null): FloorsSnapshot {
+  const floors = listFloorSummaries();
+  const caller = floorForWebContents(wc);
+  const cfg = readConfig();
+  return {
+    currentFloorNumber: caller?.floorNumber ?? 1,
+    floors,
+    recentHives: cfg.recentHives ?? []
+  };
+}
+
+function broadcastFloorsChanged(): void {
+  syncFloorWindowTitles();
+  for (const rt of floorsByWcId.values()) {
+    if (rt.win.isDestroyed() || rt.win.webContents.isDestroyed()) continue;
+    try {
+      rt.win.webContents.send('floors:changed', getFloorsSnapshotFor(rt.win.webContents));
+    } catch { /* window gone */ }
+  }
+}
+
 /** When true, skip the quit interceptor (user already confirmed). */
 let allowQuit = false;
 
@@ -472,7 +710,11 @@ const preservedWorktrees = new Map<string, PreservedWorktree>();
  * step is wrapped so a teardown error can never crash the caller (an IPC
  * handler or node-pty's onExit).
  */
-function teardownPty(id: string, opts?: { preserveWorktree?: boolean }): void {
+function teardownPty(id: string, opts?: { preserveWorktree?: boolean }, owner?: Electron.WebContents | null): void {
+  const fl = floorForWebContents(owner);
+  const activeHive = fl?.hive ?? hive;
+  const activeBreaker = fl?.breaker ?? breaker;
+  const activePtyToAgent = fl?.ptyToAgent ?? ptyToAgent;
   // Ephemeral-worker flag, read BEFORE the cleanup below deletes the entry. All
   // worker deaths (done-release, idle/token reap, manual stop, crash) funnel
   // through here, so this is the one place their floor card gets archived
@@ -483,15 +725,15 @@ function teardownPty(id: string, opts?: { preserveWorktree?: boolean }): void {
   //    non-worker PTY; ensures a dead worker's token can never reach an integration.
   try { integrationBroker.revoke(id); } catch { /* best-effort */ }
   // 1) Archive the agent — retained + flagged; only live-PTY agents are active.
-  const agentId = ptyToAgent.get(id);
+  const agentId = activePtyToAgent.get(id);
   if (agentId) {
-    ptyToAgent.delete(id);
+    activePtyToAgent.delete(id);
     // Drop watchdog state so a dead agent can't get nudged or leak its grace.
     try { workerWake.forget(agentId, id); } catch { /* best-effort */ }
     // HEAVY-JOB-SERIALIZE: its jobs went with the PTY (unless another PTY of it is still alive).
-    if (![...ptyToAgent.values()].includes(agentId)) { try { heavyLock.agentGone(agentId); } catch { /* best-effort */ } }
+    if (![...activePtyToAgent.values()].includes(agentId)) { try { heavyLock.agentGone(agentId); } catch { /* best-effort */ } }
     // Drop breaker state so a dead agent can't leak/zombie a tripped level.
-    try { breaker.forget(agentId); } catch { /* best-effort */ }
+    try { activeBreaker.forget(agentId); } catch { /* best-effort */ }
     // A replacement using this id needs a new usage counter, not the dead PTY's.
     try { telemetry.forgetAgent(agentId); } catch { /* best-effort */ }
     // Same reason, for the Grok ledger gate: a respawned agent's first sample
@@ -499,9 +741,9 @@ function teardownPty(id: string, opts?: { preserveWorktree?: boolean }): void {
     try { grokLedgerGate.forget(agentId); } catch { /* best-effort */ }
     // W1 — kill this agent's proxy-bridge sidecar (qwen), if any, so a dead
     // PTY never leaves an orphan loopback listener. No-op for non-proxy agents.
-    try { hive.stopProxyBridge(agentId); } catch (e) { console.error('[hive] stopProxyBridge failed:', e); }
-    if (hive.enabled()) {
-      try { hive.setArchived(agentId, true); } catch (e) { console.error('[hive] setArchived failed:', e); }
+    try { activeHive.stopProxyBridge(agentId); } catch (e) { console.error('[hive] stopProxyBridge failed:', e); }
+    if (activeHive.enabled()) {
+      try { activeHive.setArchived(agentId, true); } catch (e) { console.error('[hive] setArchived failed:', e); }
     }
   }
   // 2) Remove the isolated worktree, if any. Non-blocking; errors are logged.
@@ -640,14 +882,17 @@ function removeWorkerScratch(workerId: string): void {
 // relaunch carries `noAutoInstall`, so the installer can never fire (let alone loop) a
 // second time — a binary that's somehow still missing just spawns and exits normally.
 ptyManager.setExitHandler((id, exitCode, info) => {
+  const fl = floorForWebContents(info?.owner);
+  const activeHive = fl?.hive ?? hive;
+  const activePtyToAgent = fl?.ptyToAgent ?? ptyToAgent;
   // Record an ABNORMAL death before teardown — teardownPty drops the
   // pty->agent mapping, so after it runs we can no longer say WHOSE process
   // died. Only abnormal exits are recorded (recordAgentExit returns early on a
   // clean one), so this adds no noise to a normal archive.
   try {
-    const dyingAgent = ptyToAgent.get(id);
+    const dyingAgent = activePtyToAgent.get(id);
     if (dyingAgent) {
-      hive.recordAgentExit(dyingAgent, {
+      activeHive.recordAgentExit(dyingAgent, {
         exitCode,
         signal: info?.signal,
         tail: info?.tail,
@@ -670,7 +915,7 @@ ptyManager.setExitHandler((id, exitCode, info) => {
     }
     // Non-zero exit = install failed; leave its honest manual-fix message on screen.
   }
-  teardownPty(id, { preserveWorktree: true });
+  teardownPty(id, { preserveWorktree: true }, info?.owner);
 });
 
 /** Keep the system from suspending the harness while agents are running.
@@ -2457,9 +2702,12 @@ ipcMain.handle('hire:openFile', async () => {
  * window — cascades its position, and on close stops only its OWN terminals
  * while the app keeps running.
  */
-function createWindow(opts: { floor?: boolean } = {}): BrowserWindow {
+function createWindow(opts: { floor?: boolean; initialHome?: string | null } = {}): BrowserWindow {
   const isFloor = opts.floor === true;
   const iconPath = appWindowIconPath();
+  const floorNumber = isFloor
+    ? nextFloorNumber([...floorsByWcId.values()].map((r) => r.floorNumber))
+    : 1;
 
   // Primary restores saved geometry; floors cascade off the focused window.
   let saved: WindowBounds | null = null;
@@ -2474,7 +2722,7 @@ function createWindow(opts: { floor?: boolean } = {}): BrowserWindow {
     ...(geom && geom.x !== undefined && geom.y !== undefined ? { x: geom.x, y: geom.y } : {}),
     minWidth: MIN_WIN.width,
     minHeight: MIN_WIN.height,
-    title: isFloor ? 'Agent Stage — Floor' : 'Agent Stage',
+    title: isFloor ? `Agent Stage — Floor ${floorNumber}` : 'Agent Stage',
     backgroundColor: '#FFF8E7',
     titleBarStyle: 'hiddenInset',
     show: false,
@@ -2500,8 +2748,36 @@ function createWindow(opts: { floor?: boolean } = {}): BrowserWindow {
   // Capture the webContents once: after 'closed' the window is gone, but this
   // reference stays valid as the per-PTY ownership key.
   const wc = win.webContents;
+  const wcId = wc.id;
+
+  if (!isFloor) {
+    floorsByWcId.set(wcId, {
+      floorNumber: 1,
+      win,
+      wcId,
+      isPrimary: true,
+      home: process.env.MD_HIVE_ROOT || readConfig().harnessHome || null,
+      hive,
+      roster,
+      control,
+      breaker,
+      hookServer,
+      memory,
+      reflector,
+      ptyToAgent,
+      reportedAgents: []
+    });
+  } else {
+    const rt = createSecondaryFloorRuntime(win, floorNumber, opts.initialHome ?? null);
+    floorsByWcId.set(wcId, rt);
+    if (rt.home) {
+      ensureHarnessHome(rt.home);
+      bootstrapSecondaryFloorServices(rt);
+    }
+  }
 
   allWindows.add(win);
+  broadcastFloorsChanged();
   // Global timer events follow the user — the most-recently-focused window is
   // primary. The primary is also seeded synchronously so boot events route now.
   win.on('focus', () => { mainWindow = win; });
@@ -2629,6 +2905,11 @@ function createWindow(opts: { floor?: boolean } = {}): BrowserWindow {
 
   win.on('closed', () => {
     allWindows.delete(win);
+    const rt = floorsByWcId.get(wcId);
+    if (rt && !rt.isPrimary) {
+      stopSecondaryFloorServices(rt);
+    }
+    floorsByWcId.delete(wcId);
     // A closed floor must not leave its terminals running headless. (Natural
     // onExit teardown — archive + worktree cleanup — still runs per PTY.)
     if (isFloor) { try { ptyManager.killByOwner(wc); } catch { /* best-effort */ } }
@@ -2636,6 +2917,7 @@ function createWindow(opts: { floor?: boolean } = {}): BrowserWindow {
       mainWindow = null;
       for (const w of allWindows) { if (!w.isDestroyed()) { mainWindow = w; break; } }
     }
+    broadcastFloorsChanged();
     syncKeepAwake();
   });
 
@@ -2645,9 +2927,21 @@ function createWindow(opts: { floor?: boolean } = {}): BrowserWindow {
 /** Open a new floor window — gated by the multiWindow flag. Returns the window,
  *  or null when the feature is off (the entry points are hidden in that case,
  *  but the IPC stays defensive). */
-function openFloor(): BrowserWindow | null {
+function openFloor(initialHome?: string | null): BrowserWindow | null {
   if (!readConfig().multiWindow) return null;
-  return createWindow({ floor: true });
+  if (initialHome) {
+    const resolved = resolve(expandTilde(initialHome));
+    const existing = findFloorByHome(listFloorSummaries(), resolved);
+    if (existing) {
+      const existingRt = floorsByWcId.get(existing.webContentsId);
+      if (existingRt && !existingRt.win.isDestroyed()) {
+        if (existingRt.win.isMinimized()) existingRt.win.restore();
+        existingRt.win.focus();
+        return existingRt.win;
+      }
+    }
+  }
+  return createWindow({ floor: true, initialHome: initialHome ?? null });
 }
 
 /** Build + install the application menu. Only called when multiWindow is on, so
@@ -2785,6 +3079,11 @@ ipcMain.handle('pty:spawn', async (evt, opts: AgentSpawnOptions) => {
  *  no renderer `evt`). `owner` is the window that should receive this PTY's output
  *  (null → the primary window). Behavior-identical to the prior inline handler. */
 async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebContents | null): Promise<{ ok: boolean; error?: string; cwd?: string; worktreePath?: string; resumeNotFound?: boolean; resumed?: boolean; seedPrompt?: string; remoteControlSessionName?: string }> {
+  const fl = floorForWebContents(owner);
+  const activeHive = fl?.hive ?? hive;
+  const activeMemory = fl?.memory ?? memory;
+  const activePtyToAgent = fl?.ptyToAgent ?? ptyToAgent;
+  const activeHome = fl ? (fl.isPrimary ? (readConfig().harnessHome ?? fl.home) : fl.home) : readConfig().harnessHome;
   // ── cwd INGESTION — expand `~` exactly once, here ───────────────────────────
   // This is the single door every agent spawn comes through (`pty:spawn` IPC and
   // the orchestrator-triggered ephemeral-worker watcher), so it is where a user-typed
@@ -2811,7 +3110,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   //   non-Claude flagless spawns with `autoMode` flags.
   // - Only a bare relaunch (`!explicit`) falls back to `savedCmd` from `registry.json`.
   if (opts.hive) {
-    const savedCmd = hive.enabled() ? hive.lastCommand(opts.hive.id) : undefined;
+    const savedCmd = activeHive.enabled() ? activeHive.lastCommand(opts.hive.id) : undefined;
     const resolved = resolveSpawnCommandAndFlags({
       command: opts.command,
       args: opts.args,
@@ -2905,7 +3204,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   if (opts.isolate === true && await isRepo(opts.cwd)) {
     try {
       const origCwd = opts.cwd;
-      const wtRoot = join(readConfig().harnessHome ?? origCwd, 'worktrees');
+      const wtRoot = join(activeHome ?? origCwd, 'worktrees');
       // The id is renderer-supplied (validated only as a string). Slugify it so a
       // crafted id can't inject path separators, then assert the resolved path
       // stays under the worktrees root (defends against bare '..' that slugify
@@ -2950,12 +3249,12 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // seedDelivery:'type-into-tui') rather than passed on argv. Surfaced in the spawn
   // result so the renderer types it through the per-pty write-chain. (ondev-b)
   let seedPrompt: string | undefined;
-  if (opts.hive && hive.enabled()) {
+  if (opts.hive && activeHive.enabled()) {
     try {
-      const inj = await hive.ensureAgent(
+      const inj = await activeHive.ensureAgent(
         { ...opts.hive, cwd: opts.cwd, provider },
         {
-          semanticMemory: memory.active(),
+          semanticMemory: activeMemory.active(),
           knowledgeGraph: knowledge.active(),
           // Bake the ABSOLUTE KG CLI path into the agent's prompt. The prompt used
           // to spell it `$KG_CLI`, which is POSIX-only: under cmd.exe/PowerShell it
@@ -2968,7 +3267,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
           skillsDir: skillsResourceDir(),
           // The shared palace is mutated by the agent's own `mempalace` calls, so
           // the OS sandbox must let it through (empty when memory is off).
-          extraWritableDirs: [memory.env().MEMPALACE_PALACE_PATH].filter((p): p is string => !!p)
+          extraWritableDirs: [activeMemory.env().MEMPALACE_PALACE_PATH].filter((p): p is string => !!p)
         }
       );
       opts.args = [...(opts.args ?? []), ...inj.args];
@@ -2979,7 +3278,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
       if (inj.degraded) breakerToast('Agent running degraded', inj.degraded);
       // Point the agent's mempalace CLI at the shared palace + the `kg` CLI at the
       // enterprise knowledge store (both no-ops / empty when their flags are off).
-      opts.env = { ...(opts.env ?? {}), ...inj.env, ...memory.env(), ...knowledge.env() };
+      opts.env = { ...(opts.env ?? {}), ...inj.env, ...activeMemory.env(), ...knowledge.env() };
     } catch (e) {
       // Hive provisioning is best-effort; never block a spawn on it.
       console.error('[hive] ensureAgent failed:', e);
@@ -3019,7 +3318,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     // This keeps separate agents' `/model` choices out of Claude's shared global
     // settings file while retaining the existing orchestrator/worker fallback behavior.
     if (!args.includes('--model')) {
-      const m = modelForHiveSpawn(opts.hive, cfg, hive.lastModel(opts.hive.id));
+      const m = modelForHiveSpawn(opts.hive, cfg, activeHive.lastModel(opts.hive.id));
       if (m) args.push('--model', m);
     }
     // Name the Remote Control session after the agent (the orchestrator, Jim, Dev1…) so it
@@ -3053,7 +3352,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     // actually present (already or after the copy); otherwise fall back to a fresh
     // session rather than launching a `--resume` against a missing id.
     const explicitSid = typeof opts.resumeSessionId === 'string' ? opts.resumeSessionId.trim() : '';
-    let sid = explicitSid || (opts.resume === true ? hive.lastSession(opts.hive.id) : undefined);
+    let sid = explicitSid || (opts.resume === true ? activeHive.lastSession(opts.hive.id) : undefined);
 
     // GOD-STARTUP-TOKENS R1 (godStartup.ts): an AUTOMATIC orchestrator resume whose last request was too
     // big (>150k), is past the cache lifetime (1h), or was made by another Claude Code version or model
@@ -3071,9 +3370,9 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
       current: godCurrent,
       transcriptPath: (id) => sessionTranscriptPath(godCwd, id),
       now: Date.now,
-      log: (row) => hive.appendLog(row),
-      retire: (id) => hive.retireSession(godAgentId, id),
-      arm: (h) => (hive as any).armGodHandoff(godAgentId, h)
+      log: (row) => activeHive.appendLog(row),
+      retire: (id) => activeHive.retireSession(godAgentId, id),
+      arm: (h) => (activeHive as any).armGodHandoff(godAgentId, h)
     });
     if (sid && !explicitSid && godFresh(sid)) {
       console.log(`[resume] ${opts.hive.id}: session ${sid} would re-send its whole context; starting fresh with a handoff`);
@@ -3112,7 +3411,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     // resumeSessionId was read ONLY in the Claude branch, so a Codex agent
     // silently ignored it and started a brand-new empty session.
     const typedSid = typeof opts.resumeSessionId === 'string' ? opts.resumeSessionId.trim() : '';
-    const sid = typedSid || (opts.resume === true ? hive.lastSession(opts.hive.id) : undefined);
+    const sid = typedSid || (opts.resume === true ? activeHive.lastSession(opts.hive.id) : undefined);
     if (sid && rf) {
       const applied = applyResumeToArgs(opts.args ?? [], provider, sid);
       opts.args = applied.args;
@@ -3149,7 +3448,8 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // Remember which agent owns this PTY so closing the tab can archive it. A
   // live terminal means active — ensureAgent above already cleared `archived`.
   if (opts.hive?.id) {
-    ptyToAgent.set(opts.id, opts.hive.id);
+    activePtyToAgent.set(opts.id, opts.hive.id);
+    if (!fl || fl.isPrimary) ptyToAgent.set(opts.id, opts.hive.id);
     // Worker inbox-wake watchdog (#151): boot grace starts at spawn so the
     // initial orientation prompt is never mistaken for an idle agent.
     workerWake.noteSpawn(opts.id);
@@ -3237,29 +3537,36 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // record matches what the registry and the PTY actually used.
   return { ...res, cwd: opts.cwd, ...(worktreePath ? { worktreePath } : {}), ...(resumeNotFound ? { resumeNotFound: true } : {}), ...(didResume ? { resumed: true } : {}), ...(seedPrompt ? { seedPrompt } : {}), ...(resolvedRcSessionName ? { remoteControlSessionName: resolvedRcSessionName } : {}) };
 }
-ipcMain.handle('pty:write', (_evt, id: string, data: string) => {
+ipcMain.handle('pty:write', (evt, id: string, data: string) => {
   if (typeof id !== 'string' || typeof data !== 'string') return { ok: false, error: 'invalid args' };
-  return ptyManager.write(id, data);
+  const owner = BrowserWindow.fromWebContents(evt.sender)?.webContents ?? null;
+  return ptyManager.write(id, data, owner);
 });
-ipcMain.handle('pty:resize', (_evt, id: string, cols: number, rows: number) => {
+ipcMain.handle('pty:resize', (evt, id: string, cols: number, rows: number) => {
   if (typeof id !== 'string' || typeof cols !== 'number' || typeof rows !== 'number') return { ok: false, error: 'invalid args' };
-  return ptyManager.resize(id, cols, rows);
+  const owner = BrowserWindow.fromWebContents(evt.sender)?.webContents ?? null;
+  return ptyManager.resize(id, cols, rows, owner);
 });
-ipcMain.handle('pty:redraw', (_evt, id: string) => {
+ipcMain.handle('pty:redraw', (evt, id: string) => {
   if (typeof id !== 'string') return { ok: false, error: 'invalid id' };
-  return ptyManager.redraw(id);
+  const owner = BrowserWindow.fromWebContents(evt.sender)?.webContents ?? null;
+  return ptyManager.redraw(id, owner);
 });
-ipcMain.handle('pty:kill', (_evt, id: string, opts?: { preserveWorktree?: boolean }) => {
+ipcMain.handle('pty:kill', (evt, id: string, opts?: { preserveWorktree?: boolean }) => {
   if (typeof id !== 'string') return { ok: false, error: 'invalid id' };
   // Kill the process, then run the shared lifecycle teardown (archive the agent,
   // remove its isolated worktree unless restarting in place, drop the maps).
   // teardownPty is idempotent, so node-pty firing onExit once the child actually
   // dies is a harmless no-op.
-  const res = ptyManager.kill(id);
-  teardownPty(id, opts);
+  const owner = BrowserWindow.fromWebContents(evt.sender)?.webContents ?? null;
+  const res = ptyManager.kill(id, owner);
+  teardownPty(id, opts, owner);
   return res;
 });
-ipcMain.handle('pty:list', () => ptyManager.list());
+ipcMain.handle('pty:list', (evt) => {
+  const owner = BrowserWindow.fromWebContents(evt.sender)?.webContents ?? null;
+  return ptyManager.list(owner);
+});
 
 // Resolve a pasted Claude session id to the cwd it originally ran in, so the Add
 // Agent dialog can auto-fill the folder for a resume (#2 zero-step resume). Reads
@@ -3438,7 +3745,7 @@ ipcMain.handle('config:ensureHome', (_evt, path: unknown) => {
 // optionally MOVING the existing hive + palace and relaunching so every service
 // re-binds against the new root. mode: 'move' copies the data (old kept as a
 // safety net), 'fresh' just re-points and bootstraps an empty home.
-ipcMain.handle('config:changeHome', async (_evt, payload: unknown) => {
+ipcMain.handle('config:changeHome', async (evt, payload: unknown) => {
   const p = (payload ?? {}) as { newHome?: unknown; mode?: unknown };
   if (typeof p.newHome !== 'string' || !p.newHome) return { ok: false, error: 'invalid newHome' };
   const mode: 'move' | 'fresh' = p.mode === 'fresh' ? 'fresh' : 'move';
@@ -3448,22 +3755,70 @@ ipcMain.handle('config:changeHome', async (_evt, payload: unknown) => {
   // and the app would relaunch against a real directory named "~". Same
   // defence-in-depth-at-the-consumer rule as expandTilde's own doc.
   const newHome = resolve(expandTilde(p.newHome));
-  const oldRaw = readConfig().harnessHome;
+  const callerFloor = floorForWebContents(evt.sender);
+  const oldRaw = callerFloor
+    ? (callerFloor.isPrimary ? (readConfig().harnessHome ?? callerFloor.home) : callerFloor.home)
+    : readConfig().harnessHome;
   const oldHome = oldRaw ? resolve(oldRaw) : null;
+
+  // Enforce single-folder-per-floor lock: if another floor already has newHome open,
+  // focus that floor's window and return a structured result instead of colliding.
+  const collision = findFloorByHome(listFloorSummaries(), newHome, callerFloor?.wcId);
+  if (collision) {
+    const existingRt = floorsByWcId.get(collision.webContentsId);
+    if (existingRt && !existingRt.win.isDestroyed()) {
+      if (existingRt.win.isMinimized()) existingRt.win.restore();
+      existingRt.win.focus();
+    }
+    return {
+      ok: false,
+      alreadyOpenInFloor: collision.floorNumber,
+      error: `That folder is already open in Floor ${collision.floorNumber}.`
+    };
+  }
 
   // Guard against same-folder / nested-folder (a move would self-copy forever).
   if (oldHome) {
     if (newHome === oldHome) return { ok: false, error: 'That is already the current home folder.' };
-    const a = newHome + sep, b = oldHome + sep;
-    if (a.startsWith(b) || b.startsWith(a)) {
-      return { ok: false, error: 'Pick a folder that is not inside (or a parent of) the current home.' };
+    if (mode === 'move') {
+      const a = newHome + sep, b = oldHome + sep;
+      if (a.startsWith(b) || b.startsWith(a)) {
+        return { ok: false, error: 'Pick a folder that is not inside (or a parent of) the current home.' };
+      }
     }
   }
 
   const ensured = ensureHarnessHome(newHome);
   if (!ensured.ok) return ensured;
 
-  // Tear down everything bound to the OLD root before copying, so nothing writes
+  // Secondary floor: rebind ONLY this floor's runtime and reload its window in-place
+  // without restarting the app or disturbing any other open floor.
+  if (callerFloor && !callerFloor.isPrimary) {
+    stopSecondaryFloorServices(callerFloor);
+    try { ptyManager.killByOwner(callerFloor.win.webContents); } catch { /* best-effort */ }
+    if (mode === 'move' && oldHome) {
+      try {
+        for (const sub of ['hive', 'palace', 'roster.json', 'roster-backups']) {
+          const src = join(oldHome, sub);
+          if (!existsSync(src)) continue;
+          cpSync(src, join(newHome, sub), { recursive: true, force: true, dereference: false });
+        }
+      } catch (e) {
+        bootstrapSecondaryFloorServices(callerFloor);
+        return { ok: false, error: `Could not copy data: ${e instanceof Error ? e.message : String(e)}` };
+      }
+    }
+    callerFloor.home = newHome;
+    callerFloor.reportedAgents = [];
+    const { recentHives } = normalizeHiveHome(newHome, readConfig().recentHives ?? []);
+    writeConfig({ recentHives });
+    bootstrapSecondaryFloorServices(callerFloor);
+    broadcastFloorsChanged();
+    try { callerFloor.win.webContents.reload(); } catch { /* best-effort */ }
+    return { ok: true as const, reloadedInPlace: true };
+  }
+
+  // Primary floor: tear down everything bound to the OLD root before copying, so nothing writes
   // mid-copy — a live git commit into hive/.git would otherwise be copied as a
   // half-written object and corrupt the moved repo.
   try { clearMissionTimers(); } catch (e) { console.error('[changeHome] clearMissionTimers:', e); }
@@ -3503,6 +3858,22 @@ ipcMain.handle('config:changeHome', async (_evt, payload: unknown) => {
       reconcileWebhookServer();
       return { ok: false, error: `Could not copy data: ${e instanceof Error ? e.message : String(e)}` };
     }
+  }
+
+  // If other floors are currently open, rebind Floor 1 in-place rather than calling
+  // app.relaunch(), so secondary floors and their PTYs keep running uninterrupted.
+  if (floorsByWcId.size > 1 && callerFloor) {
+    writeConfig({ harnessHome: newHome });
+    callerFloor.home = newHome;
+    callerFloor.reportedAgents = [];
+    try { ptyManager.killByOwner(callerFloor.win.webContents); } catch { /* best-effort */ }
+    bootstrapHiveServices();
+    const cfg = readConfig();
+    if (cfg.slackEnabled && cfg.slackSigningSecret) void startSlackServer();
+    reconcileWebhookServer();
+    broadcastFloorsChanged();
+    try { callerFloor.win.webContents.reload(); } catch { /* best-effort */ }
+    return { ok: true as const, reloadedInPlace: true };
   }
 
   // Repoint config and relaunch so every service re-bootstraps against newHome.
@@ -3713,95 +4084,154 @@ ipcMain.handle('git:checkout', async (_evt, cwd: unknown, ref: unknown, detach: 
 // round trip at boot, in exchange for the roster being correct on first paint
 // instead of flashing an empty floor and then filling in.
 // (`roster` itself is constructed earlier so HookServer can read standing goals.)
-ipcMain.on('roster:readSync', (evt) => { evt.returnValue = roster.read(); });
-ipcMain.on('config:homeSync', (evt) => { evt.returnValue = readConfig().harnessHome ?? null; });
-ipcMain.handle('roster:read', () => roster.read());
-ipcMain.handle('roster:write', (_evt, snap: unknown) => roster.write(snap));
+ipcMain.on('roster:readSync', (evt) => {
+  const fl = floorForWebContents(evt.sender);
+  evt.returnValue = (fl?.roster ?? roster).read();
+});
+ipcMain.on('config:homeSync', (evt) => {
+  const fl = floorForWebContents(evt.sender);
+  if (fl && !fl.isPrimary) {
+    evt.returnValue = fl.home;
+    return;
+  }
+  evt.returnValue = readConfig().harnessHome ?? null;
+});
+ipcMain.handle('roster:read', (evt) => {
+  const fl = floorForWebContents(evt.sender);
+  return (fl?.roster ?? roster).read();
+});
+ipcMain.handle('roster:write', (evt, snap: unknown) => {
+  const fl = floorForWebContents(evt.sender);
+  const res = (fl?.roster ?? roster).write(snap);
+  broadcastFloorsChanged();
+  return res;
+});
 
 // ─── IPC: hive (multi-agent coordination) ───────────────────────────────────
-ipcMain.handle('hive:registry', () => hive.registry());
-ipcMain.handle('hive:renameAgent', (_evt, id: unknown, name: unknown) => {
+ipcMain.handle('hive:registry', (evt) => {
+  const fl = floorForWebContents(evt.sender);
+  return (fl?.hive ?? hive).registry();
+});
+ipcMain.handle('hive:renameAgent', (evt, id: unknown, name: unknown) => {
   if (typeof id !== 'string' || typeof name !== 'string') {
     return { ok: false, error: 'Invalid rename request' };
   }
-  return hive.renameAgent(id, name);
+  const fl = floorForWebContents(evt.sender);
+  return (fl?.hive ?? hive).renameAgent(id, name);
 });
-ipcMain.handle('hive:setAgentHold', (_evt, id: unknown, hold: unknown) => {
+ipcMain.handle('hive:setAgentHold', (evt, id: unknown, hold: unknown) => {
   if (typeof id !== 'string' || typeof hold !== 'boolean') {
     return { ok: false, error: 'Invalid hold request' };
   }
-  return hive.setAgentHold(id, hold);
+  const fl = floorForWebContents(evt.sender);
+  return (fl?.hive ?? hive).setAgentHold(id, hold);
 });
-ipcMain.handle('hive:promoteOrchestrator', (_evt, newAgentId: unknown, opts: unknown) => {
+ipcMain.handle('hive:promoteOrchestrator', (evt, newAgentId: unknown, opts: unknown) => {
   if (typeof newAgentId !== 'string' || !newAgentId.trim()) {
     return { ok: false, error: 'Invalid target agent id' };
   }
   const parsedOpts = opts && typeof opts === 'object'
     ? (opts as { holdOutgoing?: boolean; migrateInbox?: boolean })
     : undefined;
-  const res = hive.promoteOrchestrator(newAgentId, parsedOpts);
+  const fl = floorForWebContents(evt.sender);
+  const activeHive = fl?.hive ?? hive;
+  const res = activeHive.promoteOrchestrator(newAgentId, parsedOpts);
   if (res.ok) {
-    for (const w of BrowserWindow.getAllWindows()) {
-      try { if (!w.isDestroyed()) w.webContents.send('hive:orchestratorChanged', res); } catch { /* gone */ }
+    const targetWin = fl?.win ?? BrowserWindow.fromWebContents(evt.sender);
+    if (targetWin && !targetWin.isDestroyed()) {
+      try { targetWin.webContents.send('hive:orchestratorChanged', res); } catch { /* gone */ }
     }
   }
   return res;
 });
-ipcMain.handle('hive:board', () => hive.board());
-ipcMain.handle('hive:tasks', () => hive.tasks());
-ipcMain.handle('hive:log', (_evt, n: unknown) => hive.logTail(typeof n === 'number' ? n : 200));
-ipcMain.handle('hive:analytics', () => computeHiveAnalytics(hive, telemetry));
-ipcMain.handle('hive:memory', (_evt, id: unknown) => (typeof id === 'string' ? hive.memory(id) : ''));
-ipcMain.handle('hive:inbox', (_evt, id: unknown) => (typeof id === 'string' ? hive.inbox(id) : []));
+ipcMain.handle('hive:board', (evt) => {
+  const fl = floorForWebContents(evt.sender);
+  return (fl?.hive ?? hive).board();
+});
+ipcMain.handle('hive:tasks', (evt) => {
+  const fl = floorForWebContents(evt.sender);
+  return (fl?.hive ?? hive).tasks();
+});
+ipcMain.handle('hive:log', (evt, n: unknown) => {
+  const fl = floorForWebContents(evt.sender);
+  return (fl?.hive ?? hive).logTail(typeof n === 'number' ? n : 200);
+});
+ipcMain.handle('hive:analytics', (evt) => {
+  const fl = floorForWebContents(evt.sender);
+  return computeHiveAnalytics(fl?.hive ?? hive, telemetry);
+});
+ipcMain.handle('hive:memory', (evt, id: unknown) => {
+  const fl = floorForWebContents(evt.sender);
+  return typeof id === 'string' ? (fl?.hive ?? hive).memory(id) : '';
+});
+ipcMain.handle('hive:inbox', (evt, id: unknown) => {
+  const fl = floorForWebContents(evt.sender);
+  return typeof id === 'string' ? (fl?.hive ?? hive).inbox(id) : [];
+});
 // Voice read-layer: recent message CONTENT (inbox/outbox bodies), REDACTED
 // main-side by hive.voiceMessages(). The renderer/voice layer never sees a raw
 // body — secrets are stripped here, before the result crosses IPC.
-ipcMain.handle('hive:messages', (_evt, opts: unknown) =>
-  hive.voiceMessages(opts && typeof opts === 'object' ? (opts as Parameters<typeof hive.voiceMessages>[0]) : {})
-);
-ipcMain.handle('hive:send', (_evt, partial: Partial<HiveMessage>, from: unknown) => {
-  if (!hive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
+ipcMain.handle('hive:messages', (evt, opts: unknown) => {
+  const fl = floorForWebContents(evt.sender);
+  return (fl?.hive ?? hive).voiceMessages(opts && typeof opts === 'object' ? (opts as Parameters<typeof hive.voiceMessages>[0]) : {});
+});
+ipcMain.handle('hive:send', (evt, partial: Partial<HiveMessage>, from: unknown) => {
+  const fl = floorForWebContents(evt.sender);
+  const activeHive = fl?.hive ?? hive;
+  if (!activeHive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
   const sender = typeof from === 'string' ? from : 'system';
-  const msg = hive.send(partial ?? {}, sender);
+  const msg = activeHive.send(partial ?? {}, sender);
   return { ok: true, message: msg };
 });
-ipcMain.handle('hive:addTask', (_evt, task: unknown) => {
+ipcMain.handle('hive:addTask', (evt, task: unknown) => {
   if (!task || typeof task !== 'object' || Array.isArray(task)
     || typeof (task as { id?: unknown }).id !== 'string') {
     return { ok: false, error: 'invalid task' };
   }
-  if (!hive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
-  return { ok: hive.addTask(task as HiveTask) };
+  const fl = floorForWebContents(evt.sender);
+  const activeHive = fl?.hive ?? hive;
+  if (!activeHive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
+  return { ok: activeHive.addTask(task as HiveTask) };
 });
-ipcMain.handle('hive:patchTask', (_evt, id: unknown, patch: unknown) => {
+ipcMain.handle('hive:patchTask', (evt, id: unknown, patch: unknown) => {
   if (typeof id !== 'string' || !id || !patch || typeof patch !== 'object' || Array.isArray(patch)) {
     return { ok: false, error: 'invalid task patch' };
   }
-  if (!hive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
-  return { ok: hive.patchTask(id, patch as Partial<Omit<HiveTask, 'id'>>) };
+  const fl = floorForWebContents(evt.sender);
+  const activeHive = fl?.hive ?? hive;
+  if (!activeHive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
+  return { ok: activeHive.patchTask(id, patch as Partial<Omit<HiveTask, 'id'>>) };
 });
-ipcMain.handle('hive:deleteTask', (_evt, id: unknown) => {
+ipcMain.handle('hive:deleteTask', (evt, id: unknown) => {
   if (typeof id !== 'string' || !id) return { ok: false, error: 'invalid task id' };
-  if (!hive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
-  return { ok: hive.deleteTask(id) };
+  const fl = floorForWebContents(evt.sender);
+  const activeHive = fl?.hive ?? hive;
+  if (!activeHive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
+  return { ok: activeHive.deleteTask(id) };
 });
-ipcMain.handle('hive:setArchived', (_evt, id: unknown, archived: unknown) => {
+ipcMain.handle('hive:setArchived', (evt, id: unknown, archived: unknown) => {
   if (typeof id !== 'string') return { ok: false, error: 'invalid id' };
-  if (!hive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
-  hive.setArchived(id, archived === true);
+  const fl = floorForWebContents(evt.sender);
+  const activeHive = fl?.hive ?? hive;
+  if (!activeHive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
+  activeHive.setArchived(id, archived === true);
   return { ok: true };
 });
-ipcMain.handle('hive:patchAgentRole', (_evt, id: unknown, role: unknown) => {
+ipcMain.handle('hive:patchAgentRole', (evt, id: unknown, role: unknown) => {
   if (typeof id !== 'string') return { ok: false, error: 'invalid id' };
   if (typeof role !== 'string') return { ok: false, error: 'invalid role' };
-  if (!hive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
-  return hive.patchAgentRole(id, role);
+  const fl = floorForWebContents(evt.sender);
+  const activeHive = fl?.hive ?? hive;
+  if (!activeHive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
+  return activeHive.patchAgentRole(id, role);
 });
-ipcMain.handle('hive:patchAgentCommand', (_evt, id: unknown, command: unknown) => {
+ipcMain.handle('hive:patchAgentCommand', (evt, id: unknown, command: unknown) => {
   if (typeof id !== 'string') return { ok: false, error: 'invalid id' };
   if (typeof command !== 'string') return { ok: false, error: 'invalid command' };
-  if (!hive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
-  return hive.patchAgentCommand(id, command);
+  const fl = floorForWebContents(evt.sender);
+  const activeHive = fl?.hive ?? hive;
+  if (!activeHive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
+  return activeHive.patchAgentCommand(id, command);
 });
 
 // ─── IPC: Settings hero payload (remote data, cached) ───────────────────────
@@ -3935,18 +4365,30 @@ ipcMain.handle('tools:status', (): ToolStatus[] => {
 // that reliably notices mempalace being installed after boot, so it is what arms
 // the mine loop that boot's start() had to skip — otherwise the pill reads
 // "getting ready" until the app is restarted.
-ipcMain.handle('hive:memoryStatus', () => memory.refresh());
-ipcMain.handle('hive:searchMemory', (_evt, query: unknown, wing: unknown) => {
-  if (typeof query !== 'string' || !query.trim()) return { ok: false, output: '', error: 'empty query' };
-  return memory.search(query, { wing: typeof wing === 'string' ? wing : undefined });
+ipcMain.handle('hive:memoryStatus', (evt) => {
+  const fl = floorForWebContents(evt.sender);
+  return (fl?.memory ?? memory).refresh();
 });
-ipcMain.handle('hive:memoryWakeUp', (_evt, wing: unknown) =>
-  memory.wakeUp(typeof wing === 'string' ? wing : undefined));
-ipcMain.handle('hive:mineNow', () => { memory.mineNow(); return { ok: true }; });
+ipcMain.handle('hive:searchMemory', (evt, query: unknown, wing: unknown) => {
+  if (typeof query !== 'string' || !query.trim()) return { ok: false, output: '', error: 'empty query' };
+  const fl = floorForWebContents(evt.sender);
+  return (fl?.memory ?? memory).search(query, { wing: typeof wing === 'string' ? wing : undefined });
+});
+ipcMain.handle('hive:memoryWakeUp', (evt, wing: unknown) => {
+  const fl = floorForWebContents(evt.sender);
+  return (fl?.memory ?? memory).wakeUp(typeof wing === 'string' ? wing : undefined);
+});
+ipcMain.handle('hive:mineNow', (evt) => {
+  const fl = floorForWebContents(evt.sender);
+  (fl?.memory ?? memory).mineNow();
+  return { ok: true };
+});
 // Condense memory.md on demand: an explicit id condenses that one agent (skips
 // the size trigger — a "condense now" button); no id runs a full threshold scan.
-ipcMain.handle('memory:reflectNow', (_evt, id: unknown) =>
-  reflector.reflectNow(typeof id === 'string' && id ? id : undefined));
+ipcMain.handle('memory:reflectNow', (evt, id: unknown) => {
+  const fl = floorForWebContents(evt.sender);
+  return (fl?.reflector ?? reflector).reflectNow(typeof id === 'string' && id ? id : undefined);
+});
 
 // ─── IPC: enterprise Knowledge Graph (multimodal context for agents) ─────────
 ipcMain.handle('kg:status', () => knowledge.status());
@@ -4081,6 +4523,9 @@ function teardownAndQuit(): void {
   try { memory.stop(); } catch (e) { console.error('[quit] memory.stop:', e); }
   try { reflector.stop(); } catch (e) { console.error('[quit] reflector.stop:', e); }
   try { persist.close(); } catch (e) { console.error('[quit] persist.close:', e); }
+  for (const rt of floorsByWcId.values()) {
+    if (!rt.isPrimary) stopSecondaryFloorServices(rt);
+  }
   try { hive.stopAllProxyBridges(); } catch (e) { console.error('[quit] stopAllProxyBridges:', e); }
   try { killAllPtys(); } catch (e) { console.error('[quit] killAll:', e); }
   app.quit();
@@ -4100,9 +4545,94 @@ ipcMain.handle('app:cancelClose', () => {
 // Open a new floor (independent office window). Gated by the multiWindow flag
 // inside openFloor(); returns whether a window opened so a renderer button can
 // reflect availability. The app-menu "New Floor" item calls openFloor() directly.
-ipcMain.handle('window:newFloor', () => {
-  const win = openFloor();
+ipcMain.handle('window:newFloor', (_evt, initialHome?: unknown) => {
+  const home = typeof initialHome === 'string' && initialHome.trim() ? initialHome.trim() : null;
+  const win = openFloor(home);
   return { ok: win != null };
+});
+
+// ─── IPC: multiple floors (Building Tower & Discord-style Floor Rail) ───────
+ipcMain.handle('floors:list', (evt) => getFloorsSnapshotFor(evt.sender));
+
+ipcMain.handle('floors:open', (_evt, initialHome?: unknown) => {
+  const home = typeof initialHome === 'string' && initialHome.trim() ? initialHome.trim() : null;
+  if (home) {
+    const resolved = resolve(expandTilde(home));
+    const existing = findFloorByHome(listFloorSummaries(), resolved);
+    if (existing) {
+      const existingRt = floorsByWcId.get(existing.webContentsId);
+      if (existingRt && !existingRt.win.isDestroyed()) {
+        if (existingRt.win.isMinimized()) existingRt.win.restore();
+        existingRt.win.focus();
+        return { ok: true, floorNumber: existing.floorNumber, focusedExisting: true };
+      }
+    }
+  }
+  const win = openFloor(home);
+  if (!win) return { ok: false, error: 'Multi-window floors are disabled.' };
+  const rt = floorsByWcId.get(win.webContents.id);
+  return { ok: true, floorNumber: rt?.floorNumber ?? 1, focusedExisting: false };
+});
+
+ipcMain.handle('floors:focus', (_evt, floorNumber: unknown) => {
+  if (typeof floorNumber !== 'number') return { ok: false, error: 'invalid floorNumber' };
+  for (const rt of floorsByWcId.values()) {
+    if (rt.floorNumber === floorNumber && !rt.win.isDestroyed()) {
+      if (rt.win.isMinimized()) rt.win.restore();
+      rt.win.focus();
+      return { ok: true };
+    }
+  }
+  return { ok: false, error: 'floor not found' };
+});
+
+ipcMain.handle('floors:close', (_evt, floorNumber: unknown) => {
+  if (typeof floorNumber !== 'number') return { ok: false, error: 'invalid floorNumber' };
+  for (const rt of floorsByWcId.values()) {
+    if (rt.floorNumber === floorNumber && !rt.win.isDestroyed()) {
+      rt.win.close();
+      return { ok: true };
+    }
+  }
+  return { ok: false, error: 'floor not found' };
+});
+
+ipcMain.handle('floors:reportAgents', (evt, rawAgents: unknown) => {
+  const fl = floorForWebContents(evt.sender);
+  if (!fl) return { ok: false };
+  if (Array.isArray(rawAgents)) {
+    fl.reportedAgents = rawAgents
+      .filter((a): a is Record<string, unknown> => !!a && typeof a === 'object')
+      .map((a) => ({
+        id: typeof a.id === 'string' ? a.id : 'agent',
+        name: typeof a.name === 'string' ? a.name : 'Agent',
+        character: typeof a.character === 'string' ? a.character : 'michael',
+        status: typeof a.status === 'string' ? a.status : 'idle',
+        isOrchestrator: Boolean(a.isOrchestrator)
+      }));
+    broadcastFloorsChanged();
+  }
+  return { ok: true };
+});
+
+ipcMain.handle('floors:stopAll', (evt) => {
+  const fl = floorForWebContents(evt.sender);
+  const owner = BrowserWindow.fromWebContents(evt.sender)?.webContents ?? null;
+  if (!owner) return { ok: false, stopped: 0 };
+  const owned = ptyManager.list(owner);
+  let stopped = 0;
+  for (const p of owned) {
+    try {
+      ptyManager.kill(p.id, owner);
+      teardownPty(p.id, { preserveWorktree: true }, owner);
+      stopped++;
+    } catch { /* best-effort */ }
+  }
+  if (fl) {
+    fl.reportedAgents = fl.reportedAgents.map((a) => ({ ...a, status: 'stopped' }));
+    broadcastFloorsChanged();
+  }
+  return { ok: true, stopped };
 });
 
 // ─── IPC: closing time (graceful, data-loss-free shutdown) ──────────────────
@@ -4176,9 +4706,10 @@ ipcMain.handle('hive:agentUsage', (_evt, cwd: unknown) =>
 // spawn), so this works even when several agents share one cwd. Null until the
 // first hook fires; a known-but-empty transcript reads as 0 so a freshly
 // (re)started session zeroes the gauge instead of leaving a stale value up.
-ipcMain.handle('hive:agentContext', (_evt, agentId: unknown) => {
+ipcMain.handle('hive:agentContext', (evt, agentId: unknown) => {
   if (typeof agentId !== 'string') return null;
-  const tp = hookServer.transcriptPath(agentId);
+  const fl = floorForWebContents(evt.sender);
+  const tp = (fl?.hookServer ?? hookServer).transcriptPath(agentId);
   if (!tp) return null;
   return readContextTokens(tp) ?? 0;
 });
@@ -4192,9 +4723,13 @@ ipcMain.handle('hive:agentContext', (_evt, agentId: unknown) => {
 // is live-only) so the orchestrator can speak to inactive agents — their cwd and memory
 // stay reachable. PII-free: no secrets, env, or API keys ever leave main; cost is
 // carried as tokens (+ a usd field the voice layer deliberately never speaks).
-ipcMain.handle('hive:agentDirectory', () => {
-  if (!hive.enabled()) return { orchestratorId: null, agents: [] };
-  const reg = hive.registry();
+ipcMain.handle('hive:agentDirectory', (evt) => {
+  const fl = floorForWebContents(evt.sender);
+  const activeHive = fl?.hive ?? hive;
+  const activeHookServer = fl?.hookServer ?? hookServer;
+  const activeBreaker = fl?.breaker ?? breaker;
+  if (!activeHive.enabled()) return { orchestratorId: null, agents: [] };
+  const reg = activeHive.registry();
   const snap = telemetry.snapshot();
   const usageById = new Map(snap.usage.map((u) => [u.agentId, u]));
   const now = Date.now();
@@ -4202,7 +4737,7 @@ ipcMain.handle('hive:agentDirectory', () => {
     const u = usageById.get(id);
     const spans = snap.spans[id] ?? [];
     const tokens = u ? u.input + u.output + u.cacheRead + u.cacheCreation : 0;
-    const ctx = hookServer.contextFor(id);
+    const ctx = activeHookServer.contextFor(id);
     return {
       id,
       name: a.name,
@@ -4216,9 +4751,9 @@ ipcMain.handle('hive:agentDirectory', () => {
       isOrchestrator: !!a.isOrchestrator,
       isAssistant: !!a.isAssistant,
       sessionId: a.sessionId ?? null,
-      hasMemory: hive.hasMemory(id),
-      inboxBacklog: hive.inboxBacklog(id),
-      breaker: breaker.levelFor(id),
+      hasMemory: activeHive.hasMemory(id),
+      inboxBacklog: activeHive.inboxBacklog(id),
+      breaker: activeBreaker.levelFor(id),
       tokens,
       usd: u ? Number(u.usd.toFixed(4)) : 0,
       lastTool: spans.length ? spans[spans.length - 1].tool : null,
@@ -4245,49 +4780,58 @@ ipcMain.handle('telemetry:snapshot', () => telemetry.snapshot());
 // on `control:breakerState`, where the avatar adapter gives it precedence over
 // hook-derived status (#5C looping/zombie). Defined here so the channel exists
 // before Jim's policy lands; he produces, this lane consumes.
-ipcMain.handle('control:setBreakerState', (_evt, state: unknown) => {
-  try { liveWebContents()?.send('control:breakerState', state); } catch { /* window tore down */ }
+ipcMain.handle('control:setBreakerState', (evt, state: unknown) => {
+  try { (evt.sender && !evt.sender.isDestroyed() ? evt.sender : liveWebContents())?.send('control:breakerState', state); } catch { /* window tore down */ }
   return { ok: true };
 });
 
 // ─── IPC: operator control over agents (#7C.1–7C.3) ─────────────────────────
 // All return the agent's fresh control snapshot so the UI can reflect state.
-ipcMain.handle('control:pause', (_evt, agentId: unknown, on: unknown) => {
+ipcMain.handle('control:pause', (evt, agentId: unknown, on: unknown) => {
   if (typeof agentId !== 'string') return null;
-  control.pause(agentId, on === true);
-  return control.snapshot(agentId);
+  const activeControl = floorForWebContents(evt.sender)?.control ?? control;
+  activeControl.pause(agentId, on === true);
+  return activeControl.snapshot(agentId);
 });
-ipcMain.handle('control:autoDelivery', (_evt, agentId: unknown, paused: unknown) => {
+ipcMain.handle('control:autoDelivery', (evt, agentId: unknown, paused: unknown) => {
   if (typeof agentId !== 'string') return null;
   const on = paused === true;
-  control.pauseAutoDelivery(agentId, on);
+  const activeControl = floorForWebContents(evt.sender)?.control ?? control;
+  activeControl.pauseAutoDelivery(agentId, on);
   const current = new Set(readConfig().autoDeliveryPausedAgents ?? []);
   if (on) current.add(agentId); else current.delete(agentId);
   writeConfig({ autoDeliveryPausedAgents: Array.from(current).sort() });
-  return control.snapshot(agentId);
+  return activeControl.snapshot(agentId);
 });
-ipcMain.handle('control:resume', (_evt, agentId: unknown) => {
+ipcMain.handle('control:resume', (evt, agentId: unknown) => {
   if (typeof agentId !== 'string') return null;
-  control.resume(agentId);
-  return control.snapshot(agentId);
+  const activeControl = floorForWebContents(evt.sender)?.control ?? control;
+  activeControl.resume(agentId);
+  return activeControl.snapshot(agentId);
 });
-ipcMain.handle('control:gateTool', (_evt, agentId: unknown, tool: unknown, on: unknown) => {
+ipcMain.handle('control:gateTool', (evt, agentId: unknown, tool: unknown, on: unknown) => {
   if (typeof agentId !== 'string' || typeof tool !== 'string') return null;
-  control.gateTool(agentId, tool, on === true);
-  return control.snapshot(agentId);
+  const activeControl = floorForWebContents(evt.sender)?.control ?? control;
+  activeControl.gateTool(agentId, tool, on === true);
+  return activeControl.snapshot(agentId);
 });
-ipcMain.handle('control:steer', (_evt, agentId: unknown, text: unknown) => {
+ipcMain.handle('control:steer', (evt, agentId: unknown, text: unknown) => {
   if (typeof agentId !== 'string' || typeof text !== 'string') return null;
-  control.steer(agentId, text);
-  return control.snapshot(agentId);
+  const activeControl = floorForWebContents(evt.sender)?.control ?? control;
+  activeControl.steer(agentId, text);
+  return activeControl.snapshot(agentId);
 });
-ipcMain.handle('control:halt', (_evt, agentId: unknown) => {
+ipcMain.handle('control:halt', (evt, agentId: unknown) => {
   if (typeof agentId !== 'string') return null;
-  control.halt(agentId);
-  return control.snapshot(agentId);
+  const activeControl = floorForWebContents(evt.sender)?.control ?? control;
+  activeControl.halt(agentId);
+  return activeControl.snapshot(agentId);
 });
-ipcMain.handle('control:snapshot', (_evt, agentId: unknown) =>
-  typeof agentId === 'string' ? control.snapshot(agentId) : null);
+ipcMain.handle('control:snapshot', (evt, agentId: unknown) => {
+  if (typeof agentId !== 'string') return null;
+  const activeControl = floorForWebContents(evt.sender)?.control ?? control;
+  return activeControl.snapshot(agentId);
+});
 
 // ─── IPC: scheduled missions (recurring auto-dispatch) ──────────────────────
 ipcMain.handle('missions:list', () => readConfig().missions ?? []);
@@ -4311,9 +4855,10 @@ ipcMain.handle('missions:save', (_evt, missions) => {
 });
 
 // ─── IPC: full-text search across hive files (board, tasks, memory) ──────────
-ipcMain.handle('hive:textSearch', (_evt, query: unknown) => {
+ipcMain.handle('hive:textSearch', (evt, query: unknown) => {
   if (typeof query !== 'string' || !query.trim()) return { ok: false, results: [] };
-  const root = hive.root();
+  const fl = floorForWebContents(evt.sender);
+  const root = (fl?.hive ?? hive).root();
   if (!root) return { ok: false, results: [] };
   const q = query.toLowerCase();
   const results: Array<{ source: string; excerpt: string }> = [];
