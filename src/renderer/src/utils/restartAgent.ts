@@ -27,6 +27,65 @@ export interface RestartAgentOptions {
    * in one click instead of leaving the dead terminal stuck.
    */
   resumeOptional?: boolean;
+  /** Cancels the restart before another floor reset begins. */
+  signal?: AbortSignal;
+}
+
+function awaitWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(new Error('restart cancelled'));
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => { cleanup(); reject(new Error('restart cancelled')); };
+    const cleanup = () => signal.removeEventListener('abort', abort);
+    signal.addEventListener('abort', abort, { once: true });
+    promise.then((value) => {
+      cleanup();
+      if (signal.aborted) reject(new Error('restart cancelled'));
+      else resolve(value);
+    }, (error: unknown) => { cleanup(); reject(error); });
+  });
+}
+
+/** A spawn request already sent to main cannot be withdrawn. On abort, wait
+ * for that request to settle and tear down any PTY it created before returning,
+ * so the caller can safely start the next floor reset. */
+function awaitSpawnWithAbort(
+  promise: ReturnType<typeof window.cth.spawnPty>,
+  ptyId: string,
+  signal?: AbortSignal
+): ReturnType<typeof window.cth.spawnPty> {
+  if (!signal) return promise;
+  if (signal.aborted) {
+    return promise.then(async (result) => {
+      if (result.ok) await window.cth.killPty(ptyId, { preserveWorktree: true }).catch(() => undefined);
+      throw new Error('restart cancelled');
+    });
+  }
+  return new Promise((resolve, reject) => {
+    let aborted = false;
+    let settled = false;
+    const cleanup = () => signal.removeEventListener('abort', onAbort);
+    const onAbort = () => { aborted = true; };
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then((result) => {
+      if (settled) return;
+      if (aborted || signal.aborted) {
+        void (async () => {
+          if (result.ok) await window.cth.killPty(ptyId, { preserveWorktree: true }).catch(() => undefined);
+          if (!settled) { settled = true; cleanup(); reject(new Error('restart cancelled')); }
+        })();
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(result);
+    }, (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    });
+  });
 }
 
 export interface RestartAgentResult {
@@ -51,9 +110,10 @@ export async function restartAgentPty(
   const ptyId = agent.ptyId || `pty-${agent.id}`;
   const model = 'model' in opts ? opts.model : agent.model;
   const resumeOptional = opts.resumeOptional ?? true;
+  const signal = opts.signal;
 
   try {
-    const cfg = await window.cth.getConfig();
+    const cfg = await awaitWithAbort(window.cth.getConfig(), signal);
     const previousProvider = inferAgentProvider(agent.command, agent.provider);
     const provider = opts.provider ?? previousProvider;
     const preset = providerPreset(provider);
@@ -75,7 +135,7 @@ export async function restartAgentPty(
     }
 
     let resumeSessionId: string | undefined;
-    const registry = await window.cth.hiveRegistry().catch(() => null);
+    const registry = await awaitWithAbort(window.cth.hiveRegistry().catch(() => null), signal);
     if (resume) {
       const giveUpOnResume = (reason: string) => {
         if (!resumeOptional) throw new Error(reason);
@@ -86,7 +146,7 @@ export async function restartAgentPty(
       resumeSessionId = registry?.agents?.[agent.id]?.sessionId;
       if (!resumeSessionId) {
         giveUpOnResume('No recorded session ID; current process was left running.');
-      } else if (provider === 'claude' && !(await window.cth.resolveSessionCwd(resumeSessionId))) {
+      } else if (provider === 'claude' && !(await awaitWithAbort(window.cth.resolveSessionCwd(resumeSessionId), signal))) {
         giveUpOnResume('Session transcript not found; current process was left running.');
       }
     }
@@ -95,7 +155,7 @@ export async function restartAgentPty(
     let cwd = agent.cwd;
     let worktreeGone = false;
     if (agent.worktreePath) {
-      if (await window.cth.gitIsRepo(agent.worktreePath)) {
+      if (await awaitWithAbort(window.cth.gitIsRepo(agent.worktreePath), signal)) {
         cwd = agent.worktreePath;
       } else {
         worktreeGone = true;
@@ -114,12 +174,13 @@ export async function restartAgentPty(
       /* host not sized yet */
     }
 
-    const killed = await window.cth.killPty(ptyId, { preserveWorktree: true });
+    const killed = await awaitWithAbort(window.cth.killPty(ptyId, { preserveWorktree: true }), signal);
     // A pty that is ALREADY gone (crash or Ctrl-C twice) answers `no pty: <id>`,
     // which is the state killPty was trying to reach.
     if (!killed.ok && !/^no pty:/.test(killed.error ?? '')) {
       throw new Error(killed.error ?? 'Could not stop the current process.');
     }
+    if (signal?.aborted) throw new Error('restart cancelled');
 
     if (!resume) {
       resetTerminal(ptyId);
@@ -143,7 +204,7 @@ export async function restartAgentPty(
       role: roleForHiveSpawn(agent),
     };
 
-    const res = await window.cth.spawnPty({
+    const spawnRequest = window.cth.spawnPty({
       id: ptyId,
       cwd,
       command: exe,
@@ -157,6 +218,11 @@ export async function restartAgentPty(
       resumeSessionId,
       requireResume: resume && !resumeOptional,
     });
+    const res = await awaitSpawnWithAbort(spawnRequest, ptyId, signal);
+    if (signal?.aborted) {
+      if (res.ok) await window.cth.killPty(ptyId, { preserveWorktree: true });
+      throw new Error('restart cancelled');
+    }
 
     if (!res.ok) {
       throw new Error(res.error ?? 'Restart failed.');

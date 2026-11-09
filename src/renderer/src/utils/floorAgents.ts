@@ -1,6 +1,7 @@
 import { buildSpawnCommand, inferAgentProvider, isClaudeProvider, tokenizeCommand } from '@/store/config';
 import { useStore, type Agent } from '@/store/store';
 import { restartAgentPty } from '@/utils/restartAgent';
+import { disposeTerminal } from '@/components/terminalPool';
 import { newAgentId } from '@shared/agentId';
 import { squadWorkers, type FloorSquadPreset } from '@shared/floors';
 
@@ -10,6 +11,8 @@ export interface FloorResetResult {
   /** `name: reason` for each agent that could not be reset. */
   failures: string[];
 }
+
+const FLOOR_AGENT_RESET_TIMEOUT_MS = 90_000;
 
 /**
  * Reset every agent on THIS floor: a fresh session (cleared context) for each.
@@ -25,16 +28,50 @@ export async function resetFloorAgents(): Promise<FloorResetResult> {
   const agents = useStore.getState().agents;
   const failures: string[] = [];
   let reset = 0;
-  const results = await Promise.allSettled(
-    agents.map(async (a) => {
-      const res = await restartAgentPty(a, { resume: false });
+  // Restart one agent at a time. A floor may have many agents, and restarting
+  // them as a single Promise.all batch creates avoidable resource spikes.
+  for (const a of agents) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const controller = new AbortController();
+    let timedOut = false;
+    const restart = restartAgentPty(a, { resume: false, signal: controller.signal });
+    try {
+      const res = await Promise.race([
+        restart,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            timedOut = true;
+            controller.abort();
+            reject(new Error(`restart timed out after ${FLOOR_AGENT_RESET_TIMEOUT_MS / 1000}s`));
+          }, FLOOR_AGENT_RESET_TIMEOUT_MS);
+        })
+      ]);
       if (!res.ok) throw new Error(res.error ?? 'restart failed');
-    })
-  );
-  results.forEach((r, i) => {
-    if (r.status === 'fulfilled') reset++;
-    else failures.push(`${agents[i].name}: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`);
-  });
+      reset++;
+    } catch (error) {
+      failures.push(`${a.name}: ${error instanceof Error ? error.message : String(error)}`);
+      if (timedOut) {
+        const ptyId = a.ptyId || `pty-${a.id}`;
+        // restartAgentPty waits for any accepted spawn IPC and kills a late PTY
+        // before settling; await that cancellation barrier before the next reset.
+        await restart.catch(() => undefined);
+        await window.cth.killPty(ptyId, { preserveWorktree: true }).catch(() => undefined);
+        disposeTerminal(ptyId);
+        useStore.getState().updateAgent(a.id, {
+          status: 'blocked',
+          action: 'restart timed out',
+          progress: 0,
+          blockReason: {
+            summary: 'Restart timed out',
+            detail: `No fresh session started within ${FLOOR_AGENT_RESET_TIMEOUT_MS / 1000} seconds.`,
+            actions: []
+          }
+        });
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
   return { reset, failures };
 }
 

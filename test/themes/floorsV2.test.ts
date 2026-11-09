@@ -7,6 +7,7 @@ import {
   projectFolderName,
   formatFloorWindowTitle,
   isFloorSquadPreset,
+  takePendingFloorSquad,
   squadDefinition,
   squadWorkers,
   FLOOR_SQUADS,
@@ -16,6 +17,27 @@ import {
 const NUL = String.fromCharCode(0);
 const BS = String.fromCharCode(92);
 const win = (...parts: string[]) => parts.join(BS);
+
+describe('pending floor squad', () => {
+  it('keeps the squad pending until the floor home is available', () => {
+    const floor = { isPrimary: false, pendingSquad: 'standard' as const };
+    expect(takePendingFloorSquad(floor, null)).toBeNull();
+    expect(floor.pendingSquad).toBe('standard');
+  });
+
+  it('consumes the squad once the secondary floor home is known', () => {
+    const floor = { isPrimary: false, pendingSquad: 'minimal' as const };
+    expect(takePendingFloorSquad(floor, '/floor/home')).toBe('minimal');
+    expect(floor.pendingSquad).toBeNull();
+    expect(takePendingFloorSquad(floor, '/floor/home')).toBeNull();
+  });
+
+  it('does not consume the primary floor squad', () => {
+    const floor = { isPrimary: true, pendingSquad: 'empty' as const };
+    expect(takePendingFloorSquad(floor, '/primary/home')).toBeNull();
+    expect(floor.pendingSquad).toBe('empty');
+  });
+});
 
 describe('floor names', () => {
   it('sanitizeFloorName trims, collapses whitespace, strips control chars and caps length', () => {

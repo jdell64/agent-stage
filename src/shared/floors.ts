@@ -112,6 +112,17 @@ export function isFloorSquadPreset(v: unknown): v is FloorSquadPreset {
   return v === 'standard' || v === 'minimal' || v === 'empty';
 }
 
+/** Consume a new floor's one-shot squad only after its home folder is known. */
+export function takePendingFloorSquad(
+  floor: { isPrimary: boolean; pendingSquad: FloorSquadPreset | null },
+  home: string | null
+): FloorSquadPreset | null {
+  if (floor.isPrimary || !home) return null;
+  const squad = floor.pendingSquad;
+  floor.pendingSquad = null;
+  return squad;
+}
+
 export function squadDefinition(preset: FloorSquadPreset | null | undefined): FloorSquadDefinition {
   return FLOOR_SQUADS.find((s) => s.id === preset) ?? FLOOR_SQUADS[2];
 }
