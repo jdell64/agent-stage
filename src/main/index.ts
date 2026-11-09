@@ -3383,8 +3383,9 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
         activeHome,
         floorDisplayName(floorAliasFor(activeHome), activeHome, fl?.floorNumber ?? 1)
       );
+      await building.waitForSearchReady();
       buildingEnv = building.env(handle);
-      buildingLine = building.promptLine(handle);
+      buildingLine = building.promptLine(handle, activeHive.nodeCommand());
       buildingDirs = building.writableDirs(handle);
     } catch (e) {
       console.error('[building-memory] provisioning failed:', e);

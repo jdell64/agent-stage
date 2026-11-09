@@ -122,6 +122,10 @@ export class MemoryManager {
   private initStarted = false;
   /** True while a mineNow() pass is in flight — serializes palace writers. */
   private mining = false;
+  /** One CLI operation at a time per palace, including read-only queries. */
+  private storeTail: Promise<void> = Promise.resolve();
+  private storeActive = false;
+  private storeQueued = 0;
   /** agentId → memory.md mtimeMs at last successful mine (skip unchanged). */
   private lastMined = new Map<string, number>();
 
@@ -229,11 +233,27 @@ export class MemoryManager {
     // has been running — 357 of them here — and waiting for the first agent to
     // edit its memory.md would leave all of that on disk for an arbitrary
     // while. This is the pass that makes the existing pile go away by itself.
-    this.reapPalace();
+    void this.enqueueStore(() => { this.reapPalace(); }, false);
     this.startMineLoop();
   }
 
   private activeProcs = new Set<number>();
+
+  /** Queue mutations; reject interactive recall if a store operation already
+   * owns or is waiting for the palace. This prevents Chroma from opening a
+   * second PersistentClient while a mine/reap is in flight. */
+  private enqueueStore<T>(operation: () => Promise<T> | T, rejectIfBusy: boolean): Promise<T> | null {
+    if (rejectIfBusy && (this.storeActive || this.storeQueued > 0)) return null;
+    this.storeQueued += 1;
+    const run = this.storeTail.then(async () => {
+      this.storeQueued -= 1;
+      this.storeActive = true;
+      try { return await operation(); }
+      finally { this.storeActive = false; }
+    });
+    this.storeTail = run.then(() => undefined, () => undefined);
+    return run;
+  }
 
   stop(): void {
     this.mineStopped = true;
@@ -294,6 +314,10 @@ export class MemoryManager {
    *  them concurrently makes all but one fail with "held by another writer".
    *  `mining` guards against a slow pass overlapping the next interval tick. */
   async mineNow(): Promise<void> {
+    await this.enqueueStore(() => this.mineNowUnlocked(), false);
+  }
+
+  private async mineNowUnlocked(): Promise<void> {
     const home = this.getHome();
     const bin = this.bin();
     if (!this.active() || !home || !bin) return;
@@ -412,6 +436,11 @@ export class MemoryManager {
    *  process (renderer IPC, timers, every window) for up to two minutes. Same
    *  contract, but the event loop keeps breathing and a wedged CLI is swept. */
   private runCli(args: string[], label: string): Promise<{ ok: boolean; output: string; error?: string }> {
+    const operation = this.enqueueStore(() => this.runCliUnlocked(args, label), true);
+    return operation ?? Promise.resolve({ ok: false, output: '', error: 'semantic memory busy' });
+  }
+
+  private runCliUnlocked(args: string[], label: string): Promise<{ ok: boolean; output: string; error?: string }> {
     return new Promise((resolve) => {
       const bin = this.bin();
       if (!this.active() || !bin) { resolve({ ok: false, output: '', error: 'semantic memory not active' }); return; }

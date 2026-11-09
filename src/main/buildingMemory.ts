@@ -28,7 +28,7 @@
  * The plain-file layer works with no `mempalace` installed (and with semantic
  * memory switched off), so cross-floor sharing never depends on the optional CLI.
  */
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -44,7 +44,23 @@ export interface BuildingMemoryHandle {
   dir: string;
   /** Building palace path, or null when semantic memory is not active. */
   palace: string | null;
+  searchHelper: string;
 }
+
+const BUILDING_SEARCH_HELPER = `#!/usr/bin/env node
+const query = process.argv.slice(2).join(' ').trim();
+const url = process.env.CTH_BUILDING_MEMORY_SEARCH_URL;
+const token = process.env.CTH_BUILDING_MEMORY_SEARCH_TOKEN;
+if (!url || !token) { console.error('Building memory semantic search is unavailable.'); process.exit(2); }
+if (!query) { console.error('Usage: building-memory-search <query>'); process.exit(2); }
+fetch(url, { method: 'POST', headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' }, body: JSON.stringify({ query }) })
+  .then(async response => {
+    const result = await response.json();
+    if (!response.ok) { console.error(result.error || 'Building memory search failed'); process.exitCode = 2; return; }
+    process.stdout.write(result.output || 'No matches.');
+  })
+  .catch(error => { console.error(error.message || String(error)); process.exitCode = 2; });
+`;
 
 /**
  * Stable per-floor wing. Keyed on the floor's FOLDER (one-folder-per-floor is
@@ -68,6 +84,7 @@ export class BuildingMemory {
   private searchServer: Server | null = null;
   private searchUrl = '';
   private readonly searchToken = randomBytes(32).toString('hex');
+  private searchReady: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly dir: () => string,
@@ -95,11 +112,20 @@ export class BuildingMemory {
           'utf8'
         );
       }
+      const binDir = join(this.dir(), 'bin');
+      mkdirSync(binDir, { recursive: true });
+      writeFileSync(join(binDir, 'building-memory-search.cjs'), BUILDING_SEARCH_HELPER, 'utf8');
       this.writeReadme();
     } catch (e) {
       console.error('[building-memory] could not provision wing', wing, e);
     }
-    return { wing, file, dir: this.agentsDir(), palace: this.mem.active() ? join(this.dir(), 'palace') : null };
+    return {
+      wing,
+      file,
+      dir: this.agentsDir(),
+      palace: this.mem.active() ? join(this.dir(), 'palace') : null,
+      searchHelper: join(this.dir(), 'bin', 'building-memory-search.cjs')
+    };
   }
 
   /** Env that makes the building layer discoverable from an agent's shell. */
@@ -107,8 +133,8 @@ export class BuildingMemory {
     return {
       CTH_BUILDING_MEMORY_DIR: handle.dir,
       CTH_BUILDING_MEMORY_FILE: handle.file,
-      ...(handle.palace ? { CTH_BUILDING_PALACE_PATH: handle.palace } : {}),
-      ...(this.searchUrl ? {
+      ...(handle.palace && this.mem.active() ? { CTH_BUILDING_PALACE_PATH: handle.palace } : {}),
+      ...(handle.palace && this.mem.active() && this.searchUrl ? {
         CTH_BUILDING_MEMORY_SEARCH_URL: this.searchUrl,
         CTH_BUILDING_MEMORY_SEARCH_TOKEN: this.searchToken
       } : {})
@@ -120,9 +146,9 @@ export class BuildingMemory {
    * `$VAR`, and nothing volatile — the same prompt-cache rules as the rest of the
    * injected prefix (see HiveManager.injectedPrompt).
    */
-  promptLine(handle: BuildingMemoryHandle): string {
-    const semanticSearch = handle.palace && this.searchUrl
-      ? `For semantic search, POST a JSON object {"query":"..."} to the URL in CTH_BUILDING_MEMORY_SEARCH_URL with Authorization: Bearer <CTH_BUILDING_MEMORY_SEARCH_TOKEN>; this read-only app service uses the app's shared index. Never run MemPalace CLI commands against the building palace. `
+  promptLine(handle: BuildingMemoryHandle, nodeCommand = 'node'): string {
+    const semanticSearch = handle.palace && this.mem.active() && this.searchUrl
+      ? `For semantic search, run ${JSON.stringify(nodeCommand)} ${JSON.stringify(handle.searchHelper)} "<query>". The helper uses the app's read-only shared-index service; never run MemPalace CLI commands against the building palace. `
       : 'Semantic search is unavailable on this floor. ';
     return (
       `Building memory (shared across ALL floors): this is one floor of a multi-floor building and floors are isolated for work, but they share a memory layer. ` +
@@ -148,8 +174,15 @@ export class BuildingMemory {
         res.writeHead(404).end();
         return;
       }
-      if (req.headers.authorization !== `Bearer ${this.searchToken}`) {
+      const supplied = Buffer.from(req.headers.authorization ?? '');
+      const expected = Buffer.from(`Bearer ${this.searchToken}`);
+      if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
         res.writeHead(401).end();
+        return;
+      }
+      if (!this.mem.active()) {
+        res.writeHead(503, { 'retry-after': '5', 'content-type': 'application/json' })
+          .end(JSON.stringify({ ok: false, error: 'semantic memory not active' }));
         return;
       }
       let body = '';
@@ -174,20 +207,39 @@ export class BuildingMemory {
           return;
         }
         void this.mem.search(query).then((result) => {
-          res.writeHead(result.ok ? 200 : 503, { 'content-type': 'application/json' }).end(JSON.stringify(result));
+          if (!result.ok && result.error === 'semantic memory busy') {
+            res.writeHead(503, { 'retry-after': '2', 'content-type': 'application/json' }).end(JSON.stringify(result));
+            return;
+          }
+          res.writeHead(result.ok ? 200 : 503, {
+            'content-type': 'application/json',
+            ...(!result.ok ? { 'retry-after': '5' } : {})
+          })
+            .end(JSON.stringify(result));
         }).catch((error: unknown) => {
-          res.writeHead(503, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: false, output: '', error: String(error) }));
+          res.writeHead(503, { 'retry-after': '5', 'content-type': 'application/json' }).end(JSON.stringify({ ok: false, output: '', error: String(error) }));
         });
       });
     });
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      if (address && typeof address !== 'string') this.searchUrl = `http://127.0.0.1:${address.port}/search`;
+    this.searchReady = new Promise<void>((resolve) => {
+      server.on('error', (error) => {
+        console.error('[building-memory] search service error:', error);
+        resolve();
+      });
+      server.listen(0, '127.0.0.1', () => {
+        const address = server.address();
+        if (address && typeof address !== 'string') this.searchUrl = `http://127.0.0.1:${address.port}/search`;
+        resolve();
+      });
     });
     this.searchServer = server;
   }
+  async waitForSearchReady(): Promise<void> {
+    await this.searchReady;
+  }
   stop(): void {
     this.mem.stop();
+    this.searchServer?.closeAllConnections();
     this.searchServer?.close();
     this.searchServer = null;
     this.searchUrl = '';
