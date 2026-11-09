@@ -25,16 +25,17 @@ export async function resetFloorAgents(): Promise<FloorResetResult> {
   const agents = useStore.getState().agents;
   const failures: string[] = [];
   let reset = 0;
-  const results = await Promise.allSettled(
-    agents.map(async (a) => {
+  // Restart one agent at a time. A floor may have many agents, and restarting
+  // them as a single Promise.all batch creates avoidable resource spikes.
+  for (const a of agents) {
+    try {
       const res = await restartAgentPty(a, { resume: false });
       if (!res.ok) throw new Error(res.error ?? 'restart failed');
-    })
-  );
-  results.forEach((r, i) => {
-    if (r.status === 'fulfilled') reset++;
-    else failures.push(`${agents[i].name}: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`);
-  });
+      reset++;
+    } catch (error) {
+      failures.push(`${a.name}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   return { reset, failures };
 }
 
