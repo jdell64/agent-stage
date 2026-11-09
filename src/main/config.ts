@@ -331,6 +331,12 @@ export interface HarnessConfig {
    *  The on-disk hive (orchestrator orchestration under harnessHome) stays process-global;
    *  floors share it. */
   multiWindow?: boolean;
+  /** Floor aliases keyed by the floor's normalized folder (`normalizeHivePath`).
+   *  One-folder-per-floor makes the folder a stable identity: floor NUMBERS are
+   *  recycled when a floor closes, so an alias keyed by number would leak onto
+   *  the next floor opened. Floor 1 (the migrated primary hive) has no entry
+   *  until the user names it and then goes by its folder name. */
+  floorAliases?: Record<string, string>;
   /** Terminal theme — mirrored into each agent's per-session Claude settings
    *  ("theme" key) at spawn so the TUI's truecolor palette matches. Scoped to
    *  harness agents only; the user's global Claude theme is never touched. */

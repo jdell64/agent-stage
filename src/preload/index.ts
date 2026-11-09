@@ -28,8 +28,12 @@ import type { PackSummary, PackPayload, Issue } from '../shared/themePack';
 export type { PackSummary, PackPayload, Issue } from '../shared/themePack';
 import type { HiveAnalyticsReport } from '../shared/agentAnalytics';
 export type { HiveAnalyticsReport } from '../shared/agentAnalytics';
-import type { FloorAgentPreview, FloorSummary, FloorsSnapshot } from '../shared/floors';
-export type { FloorAgentPreview, FloorSummary, FloorsSnapshot } from '../shared/floors';
+import type {
+  FloorAgentPreview, FloorFolderStatus, FloorSquadPreset, FloorSummary, FloorsSnapshot, NewFloorInfo, OpenFloorOptions
+} from '../shared/floors';
+export type {
+  FloorAgentPreview, FloorFolderStatus, FloorSquadPreset, FloorSummary, FloorsSnapshot, NewFloorInfo, OpenFloorOptions
+} from '../shared/floors';
 
 /** Renderer-visible integration record: the secretRef handle is redacted to a
  *  presence boolean. Matches main `integrations.listRecordsRedacted()` — the
@@ -1032,8 +1036,31 @@ const api = {
 
   floors: {
     list: (): Promise<FloorsSnapshot> => ipcRenderer.invoke('floors:list'),
-    open: (initialHome?: string): Promise<{ ok: boolean; floorNumber?: number; focusedExisting?: boolean; error?: string }> =>
-      ipcRenderer.invoke('floors:open', initialHome),
+    /** Open a floor: a bare folder path (legacy) or the New Floor options `{ home, name, squad }`. */
+    open: (arg?: string | OpenFloorOptions): Promise<{ ok: boolean; floorNumber?: number; focusedExisting?: boolean; error?: string }> =>
+      ipcRenderer.invoke('floors:open', arg),
+    /** Next floor number + recent folders with git/lock status, for the New Floor flow. */
+    newFloorInfo: (): Promise<NewFloorInfo> => ipcRenderer.invoke('floors:newFloorInfo'),
+    inspectFolder: (path: string): Promise<FloorFolderStatus | null> => ipcRenderer.invoke('floors:inspectFolder', path),
+    browseFolder: (): Promise<string | null> => ipcRenderer.invoke('floors:browseFolder'),
+    rename: (floorNumber: number, name: string): Promise<{ ok: boolean; name?: string | null; error?: string }> =>
+      ipcRenderer.invoke('floors:rename', floorNumber, name),
+    /** Starting squad chosen in New Floor; resolves once, then null (so a reload never re-hires it). */
+    takeSquad: (): Promise<FloorSquadPreset | null> => ipcRenderer.invoke('floors:takeSquad'),
+    /** Fresh session for every agent on a floor (memory.md untouched). The floor's own window performs it. */
+    resetAgents: (floorNumber: number): Promise<{ ok: boolean; floorNumber?: number; error?: string }> =>
+      ipcRenderer.invoke('floors:resetAgents', floorNumber),
+    /** The app menu's "New Floor" asks this window to open the New Floor flow. */
+    onNewFloorRequested: (cb: () => void): (() => void) => {
+      const listener = () => cb();
+      ipcRenderer.on('floors:new-requested', listener);
+      return () => ipcRenderer.removeListener('floors:new-requested', listener);
+    },
+    onResetAgents: (cb: () => void): (() => void) => {
+      const listener = () => cb();
+      ipcRenderer.on('floors:reset-agents', listener);
+      return () => ipcRenderer.removeListener('floors:reset-agents', listener);
+    },
     focus: (floorNumber: number): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke('floors:focus', floorNumber),
     close: (floorNumber: number): Promise<{ ok: boolean; error?: string }> =>

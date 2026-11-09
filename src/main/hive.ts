@@ -810,6 +810,9 @@ export class HiveManager {
        *  MemPalace dir, which `mempalace` mutates). Absolute paths; ignored
        *  for providers without a sandbox. */
       extraWritableDirs?: string[];
+      /** Prompt paragraph describing the cross-floor building memory layer
+       *  (BuildingMemory.promptLine). Absolute paths only; stable per floor. */
+      buildingMemoryLine?: string;
     } = {}
   ): Promise<SpawnInjection> {
     const root = this.root();
@@ -942,7 +945,7 @@ export class HiveManager {
     if (!isHiveAwareProvider(meta.provider)) {
       const preset = providerPreset(meta.provider ?? 'claude');
       const flag = preset.initialPromptFlag;
-      const prompt = this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath);
+      const prompt = this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath, opts.buildingMemoryLine);
       // agy, codex, and grok expose a Claude-style lifecycle-hook surface, so each
       // gets the SAME live status + Stop→inbox-drain Claude does — selected by the
       // preset's `hookBridge`. agy needs a translating shim (its hook stdin/stdout
@@ -1087,7 +1090,7 @@ export class HiveManager {
     const args: string[] = [];
     if (!claudeProvider) return { args, env };
 
-    args.push('--append-system-prompt', this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath));
+    args.push('--append-system-prompt', this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath, opts.buildingMemoryLine));
 
     // Phase 1 — autonomy: attach lifecycle hooks via --settings (no edits to the
     // user's repo) so the agent reports activity and drains its inbox on Stop.
@@ -1948,7 +1951,8 @@ export class HiveManager {
     root: string,
     semanticMemory: boolean,
     knowledgeGraph: boolean,
-    kgCliPath?: string
+    kgCliPath?: string,
+    buildingMemoryLine?: string
   ): string {
     // Native-separator path helpers — see the 🪟 note above.
     const inDir = (...parts: string[]): string => join(dir, ...parts);
@@ -2018,6 +2022,7 @@ export class HiveManager {
       '4. At the END of a task, append what you learned to memory.md so future-you remembers.',
       guardrailsLine,
       memoryLine,
+      buildingMemoryLine ?? '',
       knowledgeLine,
       orchestratorLine,
       spawnQueueLine,
