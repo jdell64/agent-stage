@@ -3406,8 +3406,8 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
           // W3 — default-MCP consent state + the bundled skills source dir.
           mcpDefaults: readConfig().mcpDefaults,
           skillsDir: skillsResourceDir(),
-          // The shared palace is mutated by the agent's own `mempalace` calls, so
-          // the OS sandbox must let it through (empty when memory is off).
+          // Agents can write to their own floor's palace and append only to
+          // their own building wing. The app is the sole building-palace writer.
           extraWritableDirs: [activeMemory.env().MEMPALACE_PALACE_PATH, ...buildingDirs].filter((p): p is string => !!p),
           buildingMemoryLine: buildingLine
         }

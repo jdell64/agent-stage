@@ -28,7 +28,8 @@
  * The plain-file layer works with no `mempalace` installed (and with semantic
  * memory switched off), so cross-floor sharing never depends on the optional CLI.
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import { createServer, type Server } from 'node:http';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { MemoryManager, type MemorySettings } from './memory';
@@ -64,6 +65,9 @@ export function buildingWingFor(home: string): string {
 
 export class BuildingMemory {
   private readonly mem: MemoryManager;
+  private searchServer: Server | null = null;
+  private searchUrl = '';
+  private readonly searchToken = randomBytes(32).toString('hex');
 
   constructor(
     private readonly dir: () => string,
@@ -103,7 +107,11 @@ export class BuildingMemory {
     return {
       CTH_BUILDING_MEMORY_DIR: handle.dir,
       CTH_BUILDING_MEMORY_FILE: handle.file,
-      ...(handle.palace ? { CTH_BUILDING_PALACE_PATH: handle.palace } : {})
+      ...(handle.palace ? { CTH_BUILDING_PALACE_PATH: handle.palace } : {}),
+      ...(this.searchUrl ? {
+        CTH_BUILDING_MEMORY_SEARCH_URL: this.searchUrl,
+        CTH_BUILDING_MEMORY_SEARCH_TOKEN: this.searchToken
+      } : {})
     };
   }
 
@@ -113,10 +121,13 @@ export class BuildingMemory {
    * injected prefix (see HiveManager.injectedPrompt).
    */
   promptLine(handle: BuildingMemoryHandle): string {
+    const semanticSearch = handle.palace && this.searchUrl
+      ? `For semantic search, POST a JSON object {"query":"..."} to the URL in CTH_BUILDING_MEMORY_SEARCH_URL with Authorization: Bearer <CTH_BUILDING_MEMORY_SEARCH_TOKEN>; this read-only app service uses the app's shared index. Never run MemPalace CLI commands against the building palace. `
+      : 'Semantic search is unavailable on this floor. ';
     return (
       `Building memory (shared across ALL floors): this is one floor of a multi-floor building and floors are isolated for work, but they share a memory layer. ` +
       `To leave a note other floors' agents should be able to find, append it to ${handle.file} (your floor's own file; never edit another floor's). ` +
-      `To read what other floors recorded, read the files under ${handle.dir}. The app maintains the shared semantic index; do not run MemPalace CLI commands against it. ` +
+      `To read what other floors recorded, read the files under ${handle.dir}. ${semanticSearch}` +
       `Keep it to durable, cross-floor-relevant facts (conventions, decisions, gotchas, who owns what) — not task chatter, and never secrets.`
     );
   }
@@ -129,8 +140,58 @@ export class BuildingMemory {
     return [join(handle.dir, handle.wing)];
   }
 
-  start(): void { this.mem.start(); }
-  stop(): void { this.mem.stop(); }
+  start(): void {
+    this.mem.start();
+    if (this.searchServer) return;
+    const server = createServer((req, res) => {
+      if (req.method !== 'POST' || req.url !== '/search') {
+        res.writeHead(404).end();
+        return;
+      }
+      if (req.headers.authorization !== `Bearer ${this.searchToken}`) {
+        res.writeHead(401).end();
+        return;
+      }
+      let body = '';
+      let oversized = false;
+      req.setEncoding('utf8');
+      req.on('data', (chunk: string) => {
+        if (body.length + chunk.length > 4096) oversized = true;
+        else if (!oversized) body += chunk;
+      });
+      req.on('end', () => {
+        if (oversized) {
+          res.writeHead(413, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: false, error: 'request too large' }));
+          return;
+        }
+        let query = '';
+        try {
+          const parsed = JSON.parse(body) as { query?: unknown };
+          if (typeof parsed.query === 'string') query = parsed.query.trim();
+        } catch { /* invalid JSON */ }
+        if (!query || query.length > 2000) {
+          res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: false, error: 'query must be 1-2000 characters' }));
+          return;
+        }
+        void this.mem.search(query).then((result) => {
+          res.writeHead(result.ok ? 200 : 503, { 'content-type': 'application/json' }).end(JSON.stringify(result));
+        }).catch((error: unknown) => {
+          res.writeHead(503, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: false, output: '', error: String(error) }));
+        });
+      });
+    });
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (address && typeof address !== 'string') this.searchUrl = `http://127.0.0.1:${address.port}/search`;
+    });
+    this.searchServer = server;
+  }
+  stop(): void {
+    this.mem.stop();
+    this.searchServer?.close();
+    this.searchServer = null;
+    this.searchUrl = '';
+  }
   refresh(): void { this.mem.refresh(); }
   active(): boolean { return this.mem.active(); }
 

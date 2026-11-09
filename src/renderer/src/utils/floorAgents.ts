@@ -11,6 +11,8 @@ export interface FloorResetResult {
   failures: string[];
 }
 
+const FLOOR_AGENT_RESET_TIMEOUT_MS = 90_000;
+
 /**
  * Reset every agent on THIS floor: a fresh session (cleared context) for each.
  *
@@ -28,12 +30,20 @@ export async function resetFloorAgents(): Promise<FloorResetResult> {
   // Restart one agent at a time. A floor may have many agents, and restarting
   // them as a single Promise.all batch creates avoidable resource spikes.
   for (const a of agents) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const res = await restartAgentPty(a, { resume: false });
+      const res = await Promise.race([
+        restartAgentPty(a, { resume: false }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`restart timed out after ${FLOOR_AGENT_RESET_TIMEOUT_MS / 1000}s`)), FLOOR_AGENT_RESET_TIMEOUT_MS);
+        })
+      ]);
       if (!res.ok) throw new Error(res.error ?? 'restart failed');
       reset++;
     } catch (error) {
       failures.push(`${a.name}: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
   return { reset, failures };
