@@ -45,8 +45,26 @@ export function normalizeHivePath(
 }
 
 /**
- * Enforce "A single hive is only ever open in one floor".
- * Returns the existing FloorSummary that already has `candidateHome` open, or null.
+ * Check if pathA is nested within pathB or vice versa (or identical).
+ */
+export function arePathsNestedOrEqual(
+  pathA: string | null | undefined,
+  pathB: string | null | undefined,
+  platform: NodeJS.Platform = process.platform
+): boolean {
+  const normA = normalizeHivePath(pathA, platform);
+  const normB = normalizeHivePath(pathB, platform);
+  if (!normA || !normB) return false;
+  if (normA === normB) return true;
+  const sepChar = platform === 'win32' ? '\\' : '/';
+  const a = normA.endsWith(sepChar) ? normA : normA + sepChar;
+  const b = normB.endsWith(sepChar) ? normB : normB + sepChar;
+  return a.startsWith(b) || b.startsWith(a);
+}
+
+/**
+ * Enforce "A single hive is only ever open in one floor", including nested folder collisions.
+ * Returns the existing FloorSummary that already has `candidateHome` open (or nested), or null.
  */
 export function findFloorByHome(
   floors: readonly FloorSummary[],
@@ -60,8 +78,7 @@ export function findFloorByHome(
     if (excludeWebContentsId !== undefined && floor.webContentsId === excludeWebContentsId) {
       continue;
     }
-    const existing = normalizeHivePath(floor.home, platform);
-    if (existing && existing === target) return floor;
+    if (arePathsNestedOrEqual(floor.home, target, platform)) return floor;
   }
   return null;
 }

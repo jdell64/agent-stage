@@ -59,8 +59,19 @@ describe('src/shared/floors', () => {
       expect(found?.floorNumber).toBe(1);
     });
 
-    it('returns null when candidate is not open in any floor', () => {
-      const found = findFloorByHome(existingFloors, 'C:\\work\\other-project', undefined, 'win32');
+    it('detects nested folders within an open floor on Windows', () => {
+      const nested = findFloorByHome(existingFloors, 'C:\\work\\client-app\\packages\\sub', undefined, 'win32');
+      expect(nested).not.toBeNull();
+      expect(nested?.floorNumber).toBe(1);
+    });
+
+    it('detects parent folder of an open floor on Windows', () => {
+      const parent = findFloorByHome(existingFloors, 'C:\\work', undefined, 'win32');
+      expect(parent).not.toBeNull();
+    });
+
+    it('returns null when candidate is not open or nested in any floor', () => {
+      const found = findFloorByHome(existingFloors, 'C:\\work-other\\project', undefined, 'win32');
       expect(found).toBeNull();
     });
   });

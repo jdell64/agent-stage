@@ -553,6 +553,36 @@ function floorForWebContents(wc?: Electron.WebContents | null): FloorRuntime | n
   return floorsByWcId.values().next().value ?? null;
 }
 
+/** Find which floor owns a given PTY id by checking each floor's ptyToAgent. */
+function floorForPtyId(ptyId: string): FloorRuntime | null {
+  for (const rt of floorsByWcId.values()) {
+    if (rt.ptyToAgent.has(ptyId)) return rt;
+  }
+  if (ptyToAgent.has(ptyId)) {
+    for (const rt of floorsByWcId.values()) {
+      if (rt.isPrimary) return rt;
+    }
+  }
+  return null;
+}
+
+/** Find which floor owns a given agent id by checking each floor's ptyToAgent. */
+function floorForAgentId(agentId: string): FloorRuntime | null {
+  for (const rt of floorsByWcId.values()) {
+    for (const a of rt.ptyToAgent.values()) {
+      if (a === agentId) return rt;
+    }
+  }
+  for (const a of ptyToAgent.values()) {
+    if (a === agentId) {
+      for (const rt of floorsByWcId.values()) {
+        if (rt.isPrimary) return rt;
+      }
+    }
+  }
+  return null;
+}
+
 function summarizeFloor(rt: FloorRuntime): FloorSummary {
   const home = rt.isPrimary ? (process.env.MD_HIVE_ROOT || readConfig().harnessHome || rt.home) : rt.home;
   let agents: FloorAgentPreview[] = rt.reportedAgents;
@@ -644,6 +674,7 @@ interface WorkerRec {
   baseBranch: string;     // the branch its worktree was cut from (for ahead-of-base)
   spawnedAt: number;      // epoch ms
   releasing?: boolean;    // kill issued; awaiting teardownPty (skip re-processing)
+  owner?: Electron.WebContents | null; // the window / webContents that owns this worker's PTY
   /** Per-worker TOTAL-token cap from the spawn-request (overrides the config
    *  default). 0/undefined = no per-request cap. P4 plumbing — unlimited today. */
   tokenCap?: number;
@@ -711,7 +742,7 @@ const preservedWorktrees = new Map<string, PreservedWorktree>();
  * handler or node-pty's onExit).
  */
 function teardownPty(id: string, opts?: { preserveWorktree?: boolean }, owner?: Electron.WebContents | null): void {
-  const fl = floorForWebContents(owner);
+  const fl = owner ? floorForWebContents(owner) : (floorForPtyId(id) ?? floorForWebContents(null));
   const activeHive = fl?.hive ?? hive;
   const activeBreaker = fl?.breaker ?? breaker;
   const activePtyToAgent = fl?.ptyToAgent ?? ptyToAgent;
@@ -728,17 +759,30 @@ function teardownPty(id: string, opts?: { preserveWorktree?: boolean }, owner?: 
   const agentId = activePtyToAgent.get(id);
   if (agentId) {
     activePtyToAgent.delete(id);
+    // Check if any floor still has a live PTY for this agent id across the entire app
+    const isAgentStillLiveOnAnyFloor = (): boolean => {
+      if ([...ptyToAgent.values()].includes(agentId)) return true;
+      for (const r of floorsByWcId.values()) {
+        if ([...r.ptyToAgent.values()].includes(agentId)) return true;
+      }
+      return false;
+    };
+    const stillLiveElsewhere = isAgentStillLiveOnAnyFloor();
+
     // Drop watchdog state so a dead agent can't get nudged or leak its grace.
+    // forget() takes (agentId, ptyId): scopes by ptyId
     try { workerWake.forget(agentId, id); } catch { /* best-effort */ }
-    // HEAVY-JOB-SERIALIZE: its jobs went with the PTY (unless another PTY of it is still alive).
-    if (![...activePtyToAgent.values()].includes(agentId)) { try { heavyLock.agentGone(agentId); } catch { /* best-effort */ } }
-    // Drop breaker state so a dead agent can't leak/zombie a tripped level.
+    // HEAVY-JOB-SERIALIZE: only signal agentGone if no other PTY of this agent is alive on ANY floor
+    if (!stillLiveElsewhere) {
+      try { heavyLock.agentGone(agentId); } catch { /* best-effort */ }
+    }
+    // Drop breaker state for this floor
     try { activeBreaker.forget(agentId); } catch { /* best-effort */ }
-    // A replacement using this id needs a new usage counter, not the dead PTY's.
-    try { telemetry.forgetAgent(agentId); } catch { /* best-effort */ }
-    // Same reason, for the Grok ledger gate: a respawned agent's first sample
-    // must be admitted rather than matched against the dead one's last row.
-    try { grokLedgerGate.forget(agentId); } catch { /* best-effort */ }
+    // Telemetry and Grok ledger resets: only clear process-wide state if not live on another floor
+    if (!stillLiveElsewhere) {
+      try { telemetry.forgetAgent(agentId); } catch { /* best-effort */ }
+      try { grokLedgerGate.forget(agentId); } catch { /* best-effort */ }
+    }
     // W1 — kill this agent's proxy-bridge sidecar (qwen), if any, so a dead
     // PTY never leaves an orphan loopback listener. No-op for non-proxy agents.
     try { activeHive.stopProxyBridge(agentId); } catch (e) { console.error('[hive] stopProxyBridge failed:', e); }
@@ -1656,8 +1700,19 @@ function runBreakerBeat(progressWindowMs: number): void {
         body: `Automated guardrail escalated: ${reason}. Stop active work now: switch to read-only/plan, write a short plan of your next step, and send it to orchestrator for sign-off BEFORE running more tools.` }, 'breaker');
       breakerToast(`${name} constrained`, reason);
     } else if (d.action === 'stop') {
-      const ptyId = ptyForAgent(d.state.agentId);
-      if (ptyId) { try { ptyManager.kill(ptyId); } catch { /* already gone */ } teardownPty(ptyId); }
+      const fl = floorForAgentId(d.state.agentId);
+      const ownerWc = fl?.win?.webContents ?? null;
+      let ptyId: string | undefined;
+      if (fl) {
+        for (const [p, a] of fl.ptyToAgent) {
+          if (a === d.state.agentId) { ptyId = p; break; }
+        }
+      }
+      if (!ptyId) ptyId = ptyForAgent(d.state.agentId);
+      if (ptyId) {
+        try { ptyManager.kill(ptyId, ownerWc); } catch { /* already gone */ }
+        teardownPty(ptyId, undefined, ownerWc);
+      }
       breakerToast(`${name} stopped by circuit breaker`, reason);
     }
   }
@@ -3777,14 +3832,13 @@ ipcMain.handle('config:changeHome', async (evt, payload: unknown) => {
     };
   }
 
-  // Guard against same-folder / nested-folder (a move would self-copy forever).
+  // Guard against same-folder / nested-folder with the current home (both 'move' and 'fresh'
+  // mode must prevent nesting or same-folder to avoid duplicate/corrupt trees).
   if (oldHome) {
     if (newHome === oldHome) return { ok: false, error: 'That is already the current home folder.' };
-    if (mode === 'move') {
-      const a = newHome + sep, b = oldHome + sep;
-      if (a.startsWith(b) || b.startsWith(a)) {
-        return { ok: false, error: 'Pick a folder that is not inside (or a parent of) the current home.' };
-      }
+    const a = newHome + sep, b = oldHome + sep;
+    if (a.startsWith(b) || b.startsWith(a)) {
+      return { ok: false, error: 'Pick a folder that is not inside (or a parent of) the current home.' };
     }
   }
 
@@ -5318,11 +5372,13 @@ registerRealtimeActionIpc({
   controlHalt: (id) => control.halt(id),
   controlSnapshot: (id) => control.snapshot(id),
   killAgent: (id) => {
-    const r = ptyManager.kill(id);
-    teardownPty(id);
+    const fl = floorForPtyId(id) ?? floorForAgentId(id);
+    const ownerWc = fl?.win?.webContents ?? null;
+    const r = ptyManager.kill(id, ownerWc);
+    teardownPty(id, undefined, ownerWc);
     // A voice (MAIN-initiated) kill: the renderer never removed the card itself
     // (unlike a UI kill), so tell the floor to archive it. Mirrors hive:agentSpawned.
-    try { liveWebContents()?.send('hive:agentArchived', { id }); } catch { /* window torn down */ }
+    try { (ownerWc && !ownerWc.isDestroyed() ? ownerWc : liveWebContents())?.send('hive:agentArchived', { id }); } catch { /* window torn down */ }
     return r;
   },
   spawnAgent: async (opts) => {
@@ -5639,7 +5695,8 @@ async function processSpawnRequest(filePath: string): Promise<void> {
   // tokenCap is optional plumbing (default unlimited) — only a positive finite cap is kept.
   const tokenCap = typeof raw.tokenCap === 'number' && Number.isFinite(raw.tokenCap) && raw.tokenCap > 0
     ? raw.tokenCap : undefined;
-  liveWorkers.set(workerId, { workerId, reqId, name: meta.name, slack, baseBranch, spawnedAt: Date.now(), tokenCap });
+  const workerOwner = liveWebContents();
+  liveWorkers.set(workerId, { workerId, reqId, name: meta.name, slack, baseBranch, spawnedAt: Date.now(), tokenCap, owner: workerOwner });
 
   // Dispatch the objective via the standard inbox path (zero new transport),
   // reusing the autonomous-request preamble so the worker gets the exact Slack
@@ -5778,8 +5835,8 @@ async function ephemeralWorkerTick(): Promise<void> {
             rec.slack
           );
         }
-        ptyManager.kill(workerId);
-        teardownPty(workerId);
+        ptyManager.kill(workerId, rec.owner);
+        teardownPty(workerId, undefined, rec.owner);
         continue;
       }
       // Token-cap reap (default-off plumbing). An effective cap > 0 → reap when the
@@ -5795,12 +5852,12 @@ async function ephemeralWorkerTick(): Promise<void> {
             `Worker ${workerId} used ${used.toLocaleString()} tokens (> its cap of ${tokenCap.toLocaleString()}) and was reaped. Any committed work on its branch is preserved for you.`,
             rec.slack
           );
-          ptyManager.kill(workerId);
-          teardownPty(workerId);
+          ptyManager.kill(workerId, rec.owner);
+          teardownPty(workerId, undefined, rec.owner);
           continue;
         }
       }
-      const idleMs = ptyManager.idleFor(workerId);
+      const idleMs = ptyManager.idleFor(workerId, rec.owner);
       if (idleMs === undefined) continue; // PTY already gone; teardownPty cleans up
       if (idleMs > idleTimeoutMs) {
         rec.releasing = true;
@@ -5810,8 +5867,8 @@ async function ephemeralWorkerTick(): Promise<void> {
           `Worker ${workerId} produced no output for ${Math.round(idleMs / 60000)} min (> the ${Math.round(idleTimeoutMs / 60000)} min cap) and never signaled done, so it was reaped. Any committed work on its branch is preserved for you.`,
           rec.slack
         );
-        ptyManager.kill(workerId);
-        teardownPty(workerId);
+        ptyManager.kill(workerId, rec.owner);
+        teardownPty(workerId, undefined, rec.owner);
       }
     }
 
@@ -5931,8 +5988,8 @@ ipcMain.handle('workers:stop', (_evt, workerId: string): { ok: boolean; error?: 
   if (rec.releasing) return { ok: true }; // already stopping
   rec.releasing = true;
   console.log(`[worker] manual stop requested for ${workerId}`);
-  try { ptyManager.kill(workerId); } catch (e) { return { ok: false, error: String(e) }; }
-  teardownPty(workerId);
+  try { ptyManager.kill(workerId, rec.owner); } catch (e) { return { ok: false, error: String(e) }; }
+  teardownPty(workerId, undefined, rec.owner);
   return { ok: true };
 });
 
