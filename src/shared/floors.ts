@@ -1,4 +1,40 @@
-import { resolve } from 'node:path';
+/**
+ * NOTE: this module is imported by the sandboxed renderer as well as main, so it
+ * must stay free of Node built-ins (`node:path`, bare `process`).
+ */
+const hostPlatform = (): NodeJS.Platform => {
+  if (typeof process !== 'undefined' && process.platform) return process.platform;
+  if (typeof navigator !== 'undefined' && /win/i.test(navigator.platform || '')) return 'win32';
+  return 'linux';
+};
+
+/** Pure, dependency-free stand-in for path.resolve on an already-absolute path. */
+function normalizeSegments(p: string, win: boolean): string {
+  const BS = String.fromCharCode(92);
+  const sep = win ? BS : '/';
+  const unified = win ? p.split('/').join(BS) : p;
+  let prefix = '';
+  let rest = unified;
+  if (win) {
+    const drive = /^[a-zA-Z]:/.exec(unified);
+    if (drive) {
+      prefix = drive[0];
+    } else if (unified.startsWith(BS + BS)) {
+      // UNC: keep \\server\share as the prefix.
+      const parts = unified.slice(2).split(BS);
+      prefix = BS + BS + parts.slice(0, 2).join(BS);
+    }
+    rest = unified.slice(prefix.length);
+  }
+  const rooted = rest.startsWith(sep) || prefix.startsWith(BS + BS);
+  const out: string[] = [];
+  for (const seg of rest.split(sep)) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') { if (out.length) out.pop(); continue; }
+    out.push(seg);
+  }
+  return prefix + (rooted ? sep : '') + out.join(sep);
+}
 
 export interface FloorAgentPreview {
   id: string;
@@ -35,12 +71,12 @@ export interface FloorsSnapshot {
  */
 export function normalizeHivePath(
   rawPath: string | null | undefined,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = hostPlatform()
 ): string | null {
   if (typeof rawPath !== 'string') return null;
   const trimmed = rawPath.trim();
   if (!trimmed) return null;
-  const resolved = resolve(trimmed).replace(/[\\/]+$/, '');
+  const resolved = normalizeSegments(trimmed, platform === 'win32').replace(/[\\/]+$/, '');
   return platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
@@ -50,7 +86,7 @@ export function normalizeHivePath(
 export function arePathsNestedOrEqual(
   pathA: string | null | undefined,
   pathB: string | null | undefined,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = hostPlatform()
 ): boolean {
   const normA = normalizeHivePath(pathA, platform);
   const normB = normalizeHivePath(pathB, platform);
@@ -70,7 +106,7 @@ export function findFloorByHome(
   floors: readonly FloorSummary[],
   candidateHome: string | null | undefined,
   excludeWebContentsId?: number,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = hostPlatform()
 ): FloorSummary | null {
   const target = normalizeHivePath(candidateHome, platform);
   if (!target) return null;
