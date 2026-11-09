@@ -91,6 +91,26 @@ describe('resetFloorAgents', () => {
     expect(res.failures[0]).toContain('boom');
   });
 
+  it('stagger-restarts agents one at a time', async () => {
+    storeAgents = [agent('a1', 'Ada'), agent('a2', 'Ben'), agent('a3', 'Cleo')];
+    let active = 0;
+    let maxActive = 0;
+    const spawnPty = vi.fn().mockImplementation(async () => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active--;
+      return { ok: true, resumed: false };
+    });
+    installWindow(spawnPty);
+
+    const res = await resetFloorAgents();
+
+    expect(res).toEqual({ reset: 3, failures: [] });
+    expect(spawnPty).toHaveBeenCalledTimes(3);
+    expect(maxActive).toBe(1);
+  });
+
   it('is a no-op on an empty floor', async () => {
     storeAgents = [];
     installWindow(vi.fn());

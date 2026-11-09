@@ -14,9 +14,8 @@
  *   One file per floor means two floors never write the same file, so there is
  *   no cross-floor write contention and no lock to hold.
  * - READ: every agent can read any floor's file straight off disk
- *   (`CTH_BUILDING_MEMORY_DIR`), and — when the `mempalace` CLI is present —
- *   semantically search the whole building with
- *   `mempalace --palace <CTH_BUILDING_PALACE_PATH> search "<query>"`.
+ *   (`CTH_BUILDING_MEMORY_DIR`). The shared palace is maintained by the app and
+ *   is deliberately not writable from agent sandboxes.
  * - INDEX: a single MemoryManager rooted at the building dir mines every floor's
  *   file into its own wing. MemPalace permits one writer, so this process-wide
  *   instance is the only thing that ever mines the building palace; floors only
@@ -114,20 +113,20 @@ export class BuildingMemory {
    * injected prefix (see HiveManager.injectedPrompt).
    */
   promptLine(handle: BuildingMemoryHandle): string {
-    const search = handle.palace
-      ? ` To search every floor's notes by meaning, run \`mempalace --palace "${handle.palace}" search "<query>"\` (your own \`mempalace\` calls keep hitting this floor's palace).`
-      : '';
     return (
       `Building memory (shared across ALL floors): this is one floor of a multi-floor building and floors are isolated for work, but they share a memory layer. ` +
       `To leave a note other floors' agents should be able to find, append it to ${handle.file} (your floor's own file; never edit another floor's). ` +
-      `To read what other floors recorded, read the files under ${handle.dir}.${search} ` +
+      `To read what other floors recorded, read the files under ${handle.dir}. The app maintains the shared semantic index; do not run MemPalace CLI commands against it. ` +
       `Keep it to durable, cross-floor-relevant facts (conventions, decisions, gotchas, who owns what) — not task chatter, and never secrets.`
     );
   }
 
-  /** Directories an agent's OS sandbox must be allowed to write for this layer. */
+  /** Directories an agent's OS sandbox may write for this layer. */
   writableDirs(handle: BuildingMemoryHandle): string[] {
-    return [join(handle.dir, handle.wing), ...(handle.palace ? [handle.palace] : [])];
+    // Agents append their own wing's markdown. Only this process mines/indexes
+    // the building palace; exposing it as allowWrite would allow concurrent CLI
+    // searches or maintenance to race the app's single writer.
+    return [join(handle.dir, handle.wing)];
   }
 
   start(): void { this.mem.start(); }

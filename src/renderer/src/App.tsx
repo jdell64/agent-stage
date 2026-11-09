@@ -146,11 +146,13 @@ export function App() {
   const squadTaken = useRef(false);
   useEffect(() => {
     if (squadTaken.current || !floorsSnapshot || !window.cth?.floors?.takeSquad) return;
-    squadTaken.current = true;
     const me = floorsSnapshot.floors.find((f) => f.floorNumber === floorsSnapshot.currentFloorNumber);
+    const home = me?.home;
+    if (!home) return;
+    squadTaken.current = true;
     void window.cth.floors.takeSquad().then(async (preset) => {
-      if (!preset || !me?.home) return;
-      const res = await seedFloorSquad(preset, me.home);
+      if (!preset) return;
+      const res = await seedFloorSquad(preset, home);
       if (res.failures.length) setFloorNote(`Squad: hired ${res.hired}, ${res.failures.length} failed (${res.failures[0]})`);
     }).catch(() => { /* best-effort */ });
   }, [floorsSnapshot]);

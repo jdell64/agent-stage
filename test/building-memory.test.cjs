@@ -97,6 +97,19 @@ test('the agent sandbox may write only its own floor wing, never a sibling floor
   assert.equal(writable.includes(dir), false, 'the whole building root must not be writable');
 });
 
+test('the shared palace remains read-only to agents while the app owns indexing', (t) => {
+  const { dir, bm } = building(t);
+  const mine = {
+    wing: 'mine-floor',
+    file: path.join(dir, 'hive', 'agents', 'mine-floor', 'memory.md'),
+    dir: path.join(dir, 'hive', 'agents'),
+    palace: path.join(dir, 'palace')
+  };
+  const writable = bm.writableDirs(mine);
+  assert.equal(writable.includes(mine.palace), false, 'agent allowWrite must not include the shared palace');
+  assert.match(bm.promptLine(mine), /do not run MemPalace CLI commands/);
+});
+
 test('the building line reaches the agent system prompt', async (t) => {
   const home = tmp('md-building-hive-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

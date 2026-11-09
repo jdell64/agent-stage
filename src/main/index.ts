@@ -115,6 +115,7 @@ import {
   normalizeHivePath,
   sanitizeFloorName,
   shortenHomePath,
+  takePendingFloorSquad,
   type FloorAgentPreview,
   type FloorFolderStatus,
   type FloorSquadPreset,
@@ -4794,10 +4795,8 @@ ipcMain.handle('floors:rename', (_evt, floorNumber: unknown, name: unknown) => {
 /** The starting squad for a freshly created floor: handed over ONCE, then forgotten. */
 ipcMain.handle('floors:takeSquad', (evt) => {
   const fl = floorForWebContents(evt.sender);
-  if (!fl || fl.isPrimary) return null;
-  const squad = fl.pendingSquad;
-  fl.pendingSquad = null;
-  return squad;
+  if (!fl) return null;
+  return takePendingFloorSquad(fl, floorHome(fl));
 });
 
 /**
