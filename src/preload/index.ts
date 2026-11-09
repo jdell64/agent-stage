@@ -28,6 +28,8 @@ import type { PackSummary, PackPayload, Issue } from '../shared/themePack';
 export type { PackSummary, PackPayload, Issue } from '../shared/themePack';
 import type { HiveAnalyticsReport } from '../shared/agentAnalytics';
 export type { HiveAnalyticsReport } from '../shared/agentAnalytics';
+import type { FloorAgentPreview, FloorSummary, FloorsSnapshot } from '../shared/floors';
+export type { FloorAgentPreview, FloorSummary, FloorsSnapshot } from '../shared/floors';
 
 /** Renderer-visible integration record: the secretRef handle is redacted to a
  *  presence boolean. Matches main `integrations.listRecordsRedacted()` — the
@@ -676,7 +678,7 @@ const api = {
    *  into the new folder (old kept as a safety net); 'fresh' just re-points and
    *  bootstraps an empty home. On success the app relaunches (never resolves);
    *  on failure (e.g. copy error) returns { ok: false, error }. */
-  changeHome: (newHome: string, mode: 'move' | 'fresh'): Promise<{ ok: boolean; error?: string }> =>
+  changeHome: (newHome: string, mode: 'move' | 'fresh'): Promise<{ ok: boolean; error?: string; reloadedInPlace?: boolean; alreadyOpenInFloor?: number }> =>
     ipcRenderer.invoke('config:changeHome', { newHome, mode }),
 
   // ─── Filesystem (sandboxed to cwd) ───────────────────────────────────────
@@ -1026,7 +1028,26 @@ const api = {
   // ─── Multi-window floors ───────────────────────────────────────────────────
   /** Open a new floor (independent office window). No-op when the multiWindow
    *  flag is off. Resolves { ok } indicating whether a window opened. */
-  newFloor: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('window:newFloor'),
+  newFloor: (initialHome?: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('window:newFloor', initialHome),
+
+  floors: {
+    list: (): Promise<FloorsSnapshot> => ipcRenderer.invoke('floors:list'),
+    open: (initialHome?: string): Promise<{ ok: boolean; floorNumber?: number; focusedExisting?: boolean; error?: string }> =>
+      ipcRenderer.invoke('floors:open', initialHome),
+    focus: (floorNumber: number): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('floors:focus', floorNumber),
+    close: (floorNumber: number): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('floors:close', floorNumber),
+    reportAgents: (agents: FloorAgentPreview[]): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('floors:reportAgents', agents),
+    stopAll: (): Promise<{ ok: boolean; stopped: number }> =>
+      ipcRenderer.invoke('floors:stopAll'),
+    onChanged: (cb: (snap: FloorsSnapshot) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, snap: FloorsSnapshot) => cb(snap);
+      ipcRenderer.on('floors:changed', listener);
+      return () => ipcRenderer.removeListener('floors:changed', listener);
+    }
+  },
 
   // ─── Closing time (graceful shutdown via the hive) ─────────────────────────
   /** Start the closing-time protocol: the orchestrator broadcasts shutdown, every worker

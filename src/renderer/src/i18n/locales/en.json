@@ -1521,5 +1521,19 @@
       "medium": "med conf",
       "low": "low sample"
     }
+  },
+  "floors": {
+    "tower": "TOWER",
+    "buildingTower": "Building Tower",
+    "buildingTowerShortcut": "Building Tower (Ctrl+B)",
+    "newFloor": "New Floor",
+    "newFloorShortcut": "New Floor (Ctrl+Shift+N)",
+    "activeFloor": "Active Floor",
+    "workingCount": "{{count}} working",
+    "isolatedPty": "Isolated PTY",
+    "stopAll": "STOP ALL",
+    "stopAllConfirm": "Stop all {{count}} working agent(s) on Floor {{floor}}?",
+    "recentFolders": "RECENT / UNOPENED FOLDERS",
+    "noAgents": "No agents on this floor yet."
   }
 }

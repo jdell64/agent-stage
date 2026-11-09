@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { PixelPanel } from './PixelPanel';
 import { PixelButton } from './PixelButton';
 import { Icon } from './Icon';
 import type { HarnessConfig } from '@/store/config';
+import type { FloorsSnapshot } from '@shared/floors';
+import { normalizeHivePath } from '@shared/floors';
 
 export interface HivePickerProps {
   config: HarnessConfig;
@@ -32,6 +34,32 @@ export function HivePicker({ config, onOpenCurrent }: HivePickerProps) {
   const recents = (config.recentHives ?? []).filter((h) => h && h !== current);
   const [busy, setBusy] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
+  const [floorsSnapshot, setFloorsSnapshot] = useState<FloorsSnapshot | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    if (window.cth?.floors?.list) {
+      window.cth.floors.list().then((snap) => {
+        if (active) setFloorsSnapshot(snap);
+      }).catch(() => { /* ignore */ });
+    }
+    const unsub = window.cth?.floors?.onChanged?.((snap) => {
+      if (active) setFloorsSnapshot(snap);
+    });
+    return () => {
+      active = false;
+      unsub?.();
+    };
+  }, []);
+
+  // Map normalized path -> floorNumber for open floors
+  const openFloorsByPath = new Map<string, number>();
+  if (floorsSnapshot?.floors) {
+    for (const f of floorsSnapshot.floors) {
+      const norm = normalizeHivePath(f.home);
+      if (norm) openFloorsByPath.set(norm, f.floorNumber);
+    }
+  }
 
   // Open a hive. Same folder as the current one → just enter it (no relaunch).
   // A different folder → changeHome('fresh') re-points + relaunches the process.
@@ -117,34 +145,59 @@ export function HivePicker({ config, onOpenCurrent }: HivePickerProps) {
                   RECENT
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflowY: 'auto' }}>
-                  {recents.map((h) => (
-                    <button
-                      key={h}
-                      onClick={() => openHive(h)}
-                      disabled={!!busy}
-                      title={`Switch to ${h} (reloads the app)`}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
-                        background: 'var(--cth-paper-100)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
-                        border: 'none', cursor: busy ? 'default' : 'pointer', textAlign: 'left',
-                        opacity: busy && busy !== h ? 0.5 : 1
-                      }}
-                    >
-                      <Icon name="folder" />
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 12, fontWeight: 600, color: 'var(--cth-ink-900)' }}>
-                          {folderName(h)}
+                  {recents.map((h) => {
+                    const norm = normalizeHivePath(h);
+                    const openInFloor = norm ? openFloorsByPath.get(norm) : undefined;
+                    return (
+                      <button
+                        key={h}
+                        onClick={async () => {
+                          if (openInFloor !== undefined) {
+                            await window.cth?.floors?.focus?.(openInFloor);
+                            return;
+                          }
+                          void openHive(h);
+                        }}
+                        disabled={!!busy}
+                        title={openInFloor !== undefined ? `Focus Floor ${openInFloor}` : `Switch to ${h} (reloads the app)`}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
+                          background: 'var(--cth-paper-100)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
+                          border: 'none', cursor: busy ? 'default' : 'pointer', textAlign: 'left',
+                          opacity: busy && busy !== h ? 0.5 : 1
+                        }}
+                      >
+                        <Icon name="folder" />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 12, fontWeight: 600, color: 'var(--cth-ink-900)' }}>
+                              {folderName(h)}
+                            </span>
+                            {openInFloor !== undefined && (
+                              <span style={{
+                                fontSize: 9,
+                                fontFamily: 'var(--cth-font-mono)',
+                                fontWeight: 700,
+                                background: '#ea8d2a',
+                                color: '#1b140d',
+                                padding: '1px 5px',
+                                borderRadius: 3
+                              }}>
+                                Floor {openInFloor}
+                              </span>
+                            )}
+                          </div>
+                          <div style={{
+                            fontFamily: 'var(--cth-font-mono)', fontSize: 11, color: 'var(--cth-ink-500)',
+                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', direction: 'rtl', textAlign: 'left'
+                          }}>{h}</div>
                         </div>
-                        <div style={{
-                          fontFamily: 'var(--cth-font-mono)', fontSize: 11, color: 'var(--cth-ink-500)',
-                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', direction: 'rtl', textAlign: 'left'
-                        }}>{h}</div>
-                      </div>
-                      <span style={{ fontSize: 11, color: 'var(--cth-ink-500)', flexShrink: 0 }}>
-                        {busy === h ? 'opening…' : 'switch →'}
-                      </span>
-                    </button>
-                  ))}
+                        <span style={{ fontSize: 11, color: 'var(--cth-ink-500)', flexShrink: 0 }}>
+                          {busy === h ? 'opening…' : openInFloor !== undefined ? 'focus →' : 'switch →'}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             )}
