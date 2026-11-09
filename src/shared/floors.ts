@@ -42,6 +42,140 @@ export interface FloorAgentPreview {
   character: string;
   status: string;
   isOrchestrator?: boolean;
+  /** What the agent is doing right now (its card caption), when it has one. */
+  action?: string;
+}
+
+/** Starting squad for a freshly created floor (New Floor flow). */
+export type FloorSquadPreset = 'standard' | 'minimal' | 'empty';
+
+export interface FloorSquadMember {
+  /** Short role label shown under the sprite. */
+  label: string;
+  name: string;
+  character: string;
+  /** One-line brief handed to the hive as the agent's role. */
+  role: string;
+  /** The orchestrator is always spawned by the floor itself; it is listed for display only. */
+  orchestrator?: boolean;
+}
+
+export interface FloorSquadDefinition {
+  id: FloorSquadPreset;
+  title: string;
+  blurb: string;
+  tagline: string;
+  members: FloorSquadMember[];
+}
+
+/**
+ * The three starting squads offered by New Floor. Every floor boots its own
+ * orchestrator (the hive cannot run without one), so `members[0]` is always the
+ * orchestrator and `empty` means "orchestrator only, hire on demand".
+ */
+export const FLOOR_SQUADS: readonly FloorSquadDefinition[] = [
+  {
+    id: 'standard',
+    title: 'Standard Squad',
+    blurb: '5 agents (Lead, Architect, Frontend, DevOps, Reviewer)',
+    tagline: 'FULL TEAM',
+    members: [
+      { label: 'LEAD', name: 'Lead', character: 'ivo', role: 'Orchestrator — runs the floor', orchestrator: true },
+      { label: 'ARCH', name: 'Architect', character: 'ada', role: 'Architect — designs the approach, owns structure and interfaces' },
+      { label: 'FRONTEND', name: 'Frontend', character: 'dax', role: 'Frontend engineer — UI, components and UX polish' },
+      { label: 'DEVOPS', name: 'DevOps', character: 'gus', role: 'DevOps engineer — build, CI, infrastructure and release plumbing' },
+      { label: 'REVIEW', name: 'Reviewer', character: 'otto', role: 'Reviewer — reads every diff, runs the tests, gates merges' }
+    ]
+  },
+  {
+    id: 'minimal',
+    title: 'Minimal Duo',
+    blurb: '2 agents (Lead builds, Tester verifies)',
+    tagline: 'FAST & LEAN',
+    members: [
+      { label: 'LEAD', name: 'Lead', character: 'ivo', role: 'Orchestrator — runs the floor and builds', orchestrator: true },
+      { label: 'TEST', name: 'Tester', character: 'eli', role: 'Tester — writes and runs tests, verifies every change' }
+    ]
+  },
+  {
+    id: 'empty',
+    title: 'Standby Floor',
+    blurb: 'Orchestrator only, hire agents on demand',
+    tagline: 'IDLE',
+    members: [
+      { label: 'LEAD', name: 'Lead', character: 'ivo', role: 'Orchestrator — runs the floor', orchestrator: true }
+    ]
+  }
+];
+
+export function isFloorSquadPreset(v: unknown): v is FloorSquadPreset {
+  return v === 'standard' || v === 'minimal' || v === 'empty';
+}
+
+export function squadDefinition(preset: FloorSquadPreset | null | undefined): FloorSquadDefinition {
+  return FLOOR_SQUADS.find((s) => s.id === preset) ?? FLOOR_SQUADS[2];
+}
+
+/** The worker agents a preset hires on top of the orchestrator. */
+export function squadWorkers(preset: FloorSquadPreset | null | undefined): FloorSquadMember[] {
+  return squadDefinition(preset).members.filter((m) => !m.orchestrator);
+}
+
+export const FLOOR_NAME_MAX = 32;
+
+/**
+ * Clean a user-typed floor name/alias: collapse whitespace, strip control chars,
+ * cap the length. Returns null for blank input (callers then fall back to the folder name).
+ */
+export function sanitizeFloorName(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  // eslint-disable-next-line no-control-regex
+  const cleaned = Array.from(raw, (ch) => (ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127 ? ' ' : ch)).join('').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return null;
+  return cleaned.slice(0, FLOOR_NAME_MAX).trim() || null;
+}
+
+/** The label a floor goes by: its alias, else its folder name, else "Floor N". */
+export function floorDisplayName(
+  name: string | null | undefined,
+  home: string | null | undefined,
+  floorNumber: number
+): string {
+  return sanitizeFloorName(name) ?? projectFolderName(home) ?? `Floor ${floorNumber}`;
+}
+
+/** Folder name for display; a hive folder literally called `hive` reads as its parent project. */
+export function projectFolderName(rawPath: string | null | undefined): string | null {
+  if (typeof rawPath !== 'string' || !rawPath.trim()) return null;
+  const parts = rawPath.trim().replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean);
+  if (parts.length === 0) return null;
+  const last = parts[parts.length - 1];
+  const parent = parts.length >= 2 ? parts[parts.length - 2] : '';
+  return last.toLowerCase() === 'hive' && parent && !/^[a-zA-Z]:$/.test(parent) ? parent : last;
+}
+
+/** Status of a candidate folder as shown in New Floor's recent-repositories list. */
+export interface FloorFolderStatus {
+  path: string;
+  exists: boolean;
+  /** 'git' repo, plain 'folder', or a path that does not exist yet ('new'). */
+  kind: 'git' | 'folder' | 'new';
+  branch?: string | null;
+  dirty?: boolean;
+  /** Floor that already owns (or contains) this folder, when it is locked. */
+  lockedByFloor?: number | null;
+  lockedByName?: string | null;
+}
+
+export interface NewFloorInfo {
+  nextFloorNumber: number;
+  recents: FloorFolderStatus[];
+}
+
+export interface OpenFloorOptions {
+  home?: string | null;
+  name?: string | null;
+  squad?: FloorSquadPreset | null;
 }
 
 export interface FloorSummary {
@@ -49,6 +183,12 @@ export interface FloorSummary {
   webContentsId: number;
   home: string | null;
   folderName: string | null;
+  /** The floor's alias (as typed at create / rename), or null when it goes by folder name. */
+  name?: string | null;
+  /** Alias, else folder name, else "Floor N" — what the UI shows as the floor title. */
+  displayName?: string;
+  /** Headline of what the floor is doing right now (first working agent's action). */
+  activity?: string | null;
   /** Short 1-2 word tag for the Discord-style left rail tile (e.g. "CLIENT", "SIDE/APP"). */
   shortTag: string;
   /** Shortened path with `~` when under userHome (e.g. `~/work/client`). */
@@ -198,9 +338,10 @@ export function shortenHomePath(
 export function formatFloorWindowTitle(
   floorNumber: number,
   totalFloors: number,
-  home: string | null | undefined
+  home: string | null | undefined,
+  alias?: string | null
 ): string {
-  const folder = extractFolderName(home);
+  const folder = sanitizeFloorName(alias) ?? extractFolderName(home);
   if (totalFloors <= 1 && floorNumber === 1) {
     return folder ? `Agent Stage — ${folder}` : 'Agent Stage';
   }

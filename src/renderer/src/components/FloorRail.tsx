@@ -1,44 +1,26 @@
 import type { FloorsSnapshot } from '@shared/floors';
-import { deriveFloorShortTag, extractFolderName, normalizeHivePath } from '@shared/floors';
 
 export interface FloorRailProps {
   snapshot: FloorsSnapshot | null;
   onOpenTower: () => void;
   onSelectFloor: (floorNumber: number) => void;
-  onOpenRecentInNewFloor: (homePath: string) => void;
   onNewFloor: () => void;
 }
 
 /**
  * Discord-style far-left vertical Floor Rail (`56px` wide).
- * Gives one-click window switching between open floors, live green working-agent
- * badges, quick-launch tiles for recent unopened folders, a `+` New Floor button,
- * and the top warm-amber `TOWER` overview button (`Ctrl+B`).
+ * One tile per REAL open floor (never a placeholder for a recent folder: those
+ * live in the New Floor flow), live green working-agent badges, a `+` New Floor
+ * button, and the top warm-amber `TOWER` overview button (`Ctrl+B`).
  */
 export function FloorRail({
   snapshot,
   onOpenTower,
   onSelectFloor,
-  onOpenRecentInNewFloor,
   onNewFloor
 }: FloorRailProps) {
   const floors = snapshot?.floors ?? [];
   const currentFloorNumber = snapshot?.currentFloorNumber ?? 1;
-
-  // Build a list of unopened recent folders so they can appear as dimmed quick-open
-  // slots (like F3 / DOCS in the mockup).
-  const openNorms = new Set(
-    floors.map((f) => normalizeHivePath(f.home)).filter((p): p is string => Boolean(p))
-  );
-  const unopenedRecents = (snapshot?.recentHives ?? [])
-    .filter((h): h is string => {
-      if (!h) return false;
-      const norm = normalizeHivePath(h);
-      return Boolean(norm && !openNorms.has(norm));
-    })
-    .slice(0, 3);
-
-  const maxFloorNum = floors.reduce((m, f) => Math.max(m, f.floorNumber), 1);
 
   return (
     <aside
@@ -149,7 +131,7 @@ export function FloorRail({
               <button
                 type="button"
                 onClick={() => onSelectFloor(fl.floorNumber)}
-                title={`Floor ${fl.floorNumber}: ${fl.folderName} (${fl.displayPath}) — ${fl.workingCount} working, ${fl.agentCount} total`}
+                title={`Floor ${fl.floorNumber}: ${fl.displayName ?? fl.folderName} (${fl.displayPath}) — ${fl.workingCount} working, ${fl.agentCount} total`}
                 aria-label={`Floor ${fl.floorNumber}: ${fl.folderName}`}
                 aria-current={isCurrent ? 'page' : undefined}
                 style={{
@@ -230,65 +212,6 @@ export function FloorRail({
                 </span>
               )}
             </div>
-          );
-        })}
-
-        {/* Unopened recent hive slots (dimmed F<N> quick-open buttons, matching mockup) */}
-        {unopenedRecents.map((recentPath, idx) => {
-          const slotNumber = maxFloorNum + idx + 1;
-          const shortTag = deriveFloorShortTag(recentPath, slotNumber);
-          const name = extractFolderName(recentPath);
-          return (
-            <button
-              key={recentPath}
-              type="button"
-              onClick={() => onOpenRecentInNewFloor(recentPath)}
-              title={`Open ${name} (${recentPath}) in Floor ${slotNumber}`}
-              aria-label={`Open ${name} in new floor`}
-              style={{
-                width: 44,
-                height: 44,
-                borderRadius: 10,
-                border: '1px solid #2b2723',
-                background: '#1c1917',
-                color: '#787067',
-                cursor: 'pointer',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 2,
-                padding: '2px 3px',
-                opacity: 0.72
-              }}
-            >
-              <span
-                style={{
-                  fontFamily: 'var(--cth-font-ui)',
-                  fontSize: 12,
-                  fontWeight: 700,
-                  lineHeight: '14px',
-                  color: '#8c8379'
-                }}
-              >
-                F{slotNumber}
-              </span>
-              <span
-                style={{
-                  fontFamily: 'var(--cth-font-mono)',
-                  fontSize: 7.5,
-                  fontWeight: 600,
-                  lineHeight: '9px',
-                  color: '#6e665e',
-                  maxWidth: 38,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap'
-                }}
-              >
-                {shortTag}
-              </span>
-            </button>
           );
         })}
 

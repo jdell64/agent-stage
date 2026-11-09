@@ -108,14 +108,21 @@ import {
   deriveFloorShortTag,
   extractFolderName,
   findFloorByHome,
+  floorDisplayName,
   formatFloorWindowTitle,
+  isFloorSquadPreset,
   nextFloorNumber,
   normalizeHivePath,
+  sanitizeFloorName,
   shortenHomePath,
   type FloorAgentPreview,
+  type FloorFolderStatus,
+  type FloorSquadPreset,
   type FloorSummary,
-  type FloorsSnapshot
+  type FloorsSnapshot,
+  type NewFloorInfo
 } from '../shared/floors';
+import { BuildingMemory } from './buildingMemory';
 
 // Dev isolation: apply MD_USER_DATA_DIR early before config, db, or hive initialize
 if (process.env.MD_USER_DATA_DIR && typeof process.env.MD_USER_DATA_DIR === 'string') {
@@ -360,6 +367,12 @@ const memory = new MemoryManager(
   () => readConfig().harnessHome,
   () => { const c = readConfig(); return { enabled: c.semanticMemory !== false, model: c.embeddingModel ?? 'minilm' }; }
 );
+// Cross-floor shared memory (one building-level notes layer + palace for ALL floors).
+// Process-wide on purpose: MemPalace allows one writer, so exactly one instance mines it.
+const building = new BuildingMemory(
+  () => join(app.getPath('userData'), 'building'),
+  () => { const c = readConfig(); return { enabled: c.semanticMemory !== false, model: c.embeddingModel ?? 'minilm' }; }
+);
 // Enterprise Knowledge Graph — file-backed store + agent CLI (default OFF).
 const knowledge = new KnowledgeManager();
 /** Reads the reflect tunables from config each tick (defaults baked in here so a
@@ -417,11 +430,19 @@ interface FloorRuntime {
   reflector: MemoryReflector;
   ptyToAgent: Map<string, string>;
   reportedAgents: FloorAgentPreview[];
+  /** Starting squad chosen in New Floor. Handed to the floor's renderer exactly once
+   *  (`floors:takeSquad`) so a window reload never re-hires the squad. */
+  pendingSquad: FloorSquadPreset | null;
 }
 
 const floorsByWcId = new Map<number, FloorRuntime>();
 
-function createSecondaryFloorRuntime(win: BrowserWindow, floorNumber: number, initialHome: string | null): FloorRuntime {
+function createSecondaryFloorRuntime(
+  win: BrowserWindow,
+  floorNumber: number,
+  initialHome: string | null,
+  squad: FloorSquadPreset | null = null
+): FloorRuntime {
   const wc = win.webContents;
   const wcId = wc.id;
   const runtimeRef: { current: FloorRuntime | null } = { current: null };
@@ -500,7 +521,8 @@ function createSecondaryFloorRuntime(win: BrowserWindow, floorNumber: number, in
     memory: floorMemory,
     reflector: floorReflector,
     ptyToAgent: new Map<string, string>(),
-    reportedAgents: []
+    reportedAgents: [],
+    pendingSquad: squad
   };
   runtimeRef.current = rt;
   return rt;
@@ -583,8 +605,37 @@ function floorForAgentId(agentId: string): FloorRuntime | null {
   return null;
 }
 
+/** The folder a floor lives in, as the floor itself sees it (primary: the configured hive root). */
+function floorHome(rt: FloorRuntime): string | null {
+  return rt.isPrimary ? (process.env.MD_HIVE_ROOT || readConfig().harnessHome || rt.home) : rt.home;
+}
+
+function floorAliasFor(home: string | null | undefined): string | null {
+  const key = normalizeHivePath(home);
+  if (!key) return null;
+  return sanitizeFloorName(readConfig().floorAliases?.[key]);
+}
+
+/** Persist (or clear, when `name` is blank) a floor's alias, keyed by its folder. */
+function setFloorAlias(home: string, name: string | null | undefined): string | null {
+  const key = normalizeHivePath(home);
+  if (!key) return null;
+  const clean = sanitizeFloorName(name);
+  const next = { ...(readConfig().floorAliases ?? {}) };
+  if (clean) next[key] = clean; else delete next[key];
+  writeConfig({ floorAliases: next });
+  return clean;
+}
+
+/** One-line "what is this floor doing": the first working agent's caption. */
+function floorActivity(agents: readonly FloorAgentPreview[]): string | null {
+  const working = agents.filter((a) => ['working', 'thinking', 'typing', 'compacting'].includes(a.status));
+  const pick = working.find((a) => a.action && a.action.trim()) ?? null;
+  return pick?.action?.trim() ? pick.action.trim().slice(0, 140) : null;
+}
+
 function summarizeFloor(rt: FloorRuntime): FloorSummary {
-  const home = rt.isPrimary ? (process.env.MD_HIVE_ROOT || readConfig().harnessHome || rt.home) : rt.home;
+  const home = floorHome(rt);
   let agents: FloorAgentPreview[] = rt.reportedAgents;
   if (agents.length === 0 && home) {
     try {
@@ -607,11 +658,14 @@ function summarizeFloor(rt: FloorRuntime): FloorSummary {
     webContentsId: rt.wcId,
     home,
     folderName: extractFolderName(home),
-    shortTag: deriveFloorShortTag(home, rt.floorNumber),
+    name: floorAliasFor(home),
+    displayName: floorDisplayName(floorAliasFor(home), home, rt.floorNumber),
+    activity: floorActivity(agents),
+    shortTag: floorAliasFor(home)?.slice(0, 8).trim().toUpperCase() ?? deriveFloorShortTag(home, rt.floorNumber),
     displayPath: shortenHomePath(home, homedir()),
     agentCount: agents.length,
     workingCount: countWorkingAgents(agents),
-    agents: agents.slice(0, 8)
+    agents: agents.slice(0, 12)
   };
 }
 
@@ -627,9 +681,9 @@ function syncFloorWindowTitles(): void {
   const total = summaries.length;
   for (const rt of floorsByWcId.values()) {
     if (rt.win.isDestroyed()) continue;
-    const home = rt.isPrimary ? (process.env.MD_HIVE_ROOT || readConfig().harnessHome || rt.home) : rt.home;
+    const home = floorHome(rt);
     try {
-      rt.win.setTitle(formatFloorWindowTitle(rt.floorNumber, total, home));
+      rt.win.setTitle(formatFloorWindowTitle(rt.floorNumber, total, home, floorAliasFor(home)));
     } catch { /* window closing */ }
   }
 }
@@ -2757,7 +2811,7 @@ ipcMain.handle('hire:openFile', async () => {
  * window — cascades its position, and on close stops only its OWN terminals
  * while the app keeps running.
  */
-function createWindow(opts: { floor?: boolean; initialHome?: string | null } = {}): BrowserWindow {
+function createWindow(opts: { floor?: boolean; initialHome?: string | null; name?: string | null; squad?: FloorSquadPreset | null } = {}): BrowserWindow {
   const isFloor = opts.floor === true;
   const iconPath = appWindowIconPath();
   const floorNumber = isFloor
@@ -2820,11 +2874,15 @@ function createWindow(opts: { floor?: boolean; initialHome?: string | null } = {
       memory,
       reflector,
       ptyToAgent,
-      reportedAgents: []
+      reportedAgents: [],
+      pendingSquad: null
     });
   } else {
-    const rt = createSecondaryFloorRuntime(win, floorNumber, opts.initialHome ?? null);
+    const rt = createSecondaryFloorRuntime(win, floorNumber, opts.initialHome ?? null, opts.squad ?? null);
     floorsByWcId.set(wcId, rt);
+    // Name the floor at creation. Stored by folder so it survives close/reopen and is
+    // never inherited by whichever floor reuses this floor NUMBER later.
+    if (opts.name && rt.home) setFloorAlias(rt.home, opts.name);
     if (rt.home) {
       ensureHarnessHome(rt.home);
       bootstrapSecondaryFloorServices(rt);
@@ -2953,9 +3011,11 @@ function createWindow(opts: { floor?: boolean; initialHome?: string | null } = {
   });
 
   if (isDev && process.env.ELECTRON_RENDERER_URL) {
-    win.loadURL(process.env.ELECTRON_RENDERER_URL);
+    // A floor window is told it is one (`?floor=N`) so its renderer skips the launch-time
+    // hive picker: the floor's folder is already chosen (New Floor / floors:open).
+    win.loadURL(isFloor ? `${process.env.ELECTRON_RENDERER_URL}${process.env.ELECTRON_RENDERER_URL.includes('?') ? '&' : '?'}floor=${floorNumber}` : process.env.ELECTRON_RENDERER_URL);
   } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'));
+    win.loadFile(join(__dirname, '../renderer/index.html'), isFloor ? { query: { floor: String(floorNumber) } } : undefined);
   }
 
   win.on('closed', () => {
@@ -2982,7 +3042,7 @@ function createWindow(opts: { floor?: boolean; initialHome?: string | null } = {
 /** Open a new floor window — gated by the multiWindow flag. Returns the window,
  *  or null when the feature is off (the entry points are hidden in that case,
  *  but the IPC stays defensive). */
-function openFloor(initialHome?: string | null): BrowserWindow | null {
+function openFloor(initialHome?: string | null, extra: { name?: string | null; squad?: FloorSquadPreset | null } = {}): BrowserWindow | null {
   if (!readConfig().multiWindow) return null;
   if (initialHome) {
     const resolved = resolve(expandTilde(initialHome));
@@ -2996,7 +3056,7 @@ function openFloor(initialHome?: string | null): BrowserWindow | null {
       }
     }
   }
-  return createWindow({ floor: true, initialHome: initialHome ?? null });
+  return createWindow({ floor: true, initialHome: initialHome ?? null, name: extra.name ?? null, squad: extra.squad ?? null });
 }
 
 /** Build + install the application menu. Only called when multiWindow is on, so
@@ -3008,7 +3068,14 @@ function installAppMenu(): void {
   const newFloorItem = {
     label: 'New Floor',
     accelerator: 'CmdOrCtrl+Shift+N',
-    click: () => { openFloor(); }
+    // The menu opens the New Floor FLOW (name + folder + squad) in the focused window; a bare
+    // openFloor() here would create a folderless floor that skips the one-folder-per-floor check.
+    click: () => {
+      const target = BrowserWindow.getFocusedWindow() ?? mainWindow;
+      if (target && !target.isDestroyed() && !target.webContents.isDestroyed()) {
+        target.webContents.send('floors:new-requested');
+      }
+    }
   };
   const template: Electron.MenuItemConstructorOptions[] = [
     ...(isMac ? [{ role: 'appMenu' as const }] : []),
@@ -3304,6 +3371,24 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // seedDelivery:'type-into-tui') rather than passed on argv. Surfaced in the spawn
   // result so the renderer types it through the per-pty write-chain. (ondev-b)
   let seedPrompt: string | undefined;
+  // Cross-floor shared memory: this floor's wing + the env/prompt that expose it.
+  // Provisioned best-effort; the building layer must never block a spawn.
+  let buildingEnv: Record<string, string> = {};
+  let buildingLine = '';
+  let buildingDirs: string[] = [];
+  if (opts.hive && activeHome) {
+    try {
+      const handle = building.ensureWing(
+        activeHome,
+        floorDisplayName(floorAliasFor(activeHome), activeHome, fl?.floorNumber ?? 1)
+      );
+      buildingEnv = building.env(handle);
+      buildingLine = building.promptLine(handle);
+      buildingDirs = building.writableDirs(handle);
+    } catch (e) {
+      console.error('[building-memory] provisioning failed:', e);
+    }
+  }
   if (opts.hive && activeHive.enabled()) {
     try {
       const inj = await activeHive.ensureAgent(
@@ -3322,7 +3407,8 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
           skillsDir: skillsResourceDir(),
           // The shared palace is mutated by the agent's own `mempalace` calls, so
           // the OS sandbox must let it through (empty when memory is off).
-          extraWritableDirs: [activeMemory.env().MEMPALACE_PALACE_PATH].filter((p): p is string => !!p)
+          extraWritableDirs: [activeMemory.env().MEMPALACE_PALACE_PATH, ...buildingDirs].filter((p): p is string => !!p),
+          buildingMemoryLine: buildingLine
         }
       );
       opts.args = [...(opts.args ?? []), ...inj.args];
@@ -3333,7 +3419,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
       if (inj.degraded) breakerToast('Agent running degraded', inj.degraded);
       // Point the agent's mempalace CLI at the shared palace + the `kg` CLI at the
       // enterprise knowledge store (both no-ops / empty when their flags are off).
-      opts.env = { ...(opts.env ?? {}), ...inj.env, ...activeMemory.env(), ...knowledge.env() };
+      opts.env = { ...(opts.env ?? {}), ...inj.env, ...activeMemory.env(), ...buildingEnv, ...knowledge.env() };
     } catch (e) {
       // Hive provisioning is best-effort; never block a spawn on it.
       console.error('[hive] ensureAgent failed:', e);
@@ -3753,7 +3839,14 @@ ipcMain.handle('integrations:test', async (_evt, payload: unknown) => {
 });
 
 // ─── IPC: config ────────────────────────────────────────────────────────────
-ipcMain.handle('config:get', (): HarnessConfig => readConfig());
+// A floor window must see ITS OWN folder as `harnessHome`: the renderer spawns the floor's
+// orchestrator with `cwd: config.harnessHome`, so handing a secondary floor the primary's
+// folder here would put floor 2's orchestrator in floor 1's directory.
+ipcMain.handle('config:get', (evt): HarnessConfig => {
+  const cfg = readConfig();
+  const fl = floorForWebContents(evt.sender);
+  return fl && !fl.isPrimary && fl.home ? { ...cfg, harnessHome: fl.home } : cfg;
+});
 ipcMain.handle('config:update', (_evt, patch: Partial<HarnessConfig>) => {
   // FIRST RUN: every hive-bound service is started by bootstrapHiveServices(),
   // which runs once at app-ready and early-returns on `!hive.enabled()` — i.e.
@@ -4575,6 +4668,7 @@ function teardownAndQuit(): void {
   try { stopSlackServer(); } catch (e) { console.error('[quit] slack.stop:', e); }
   try { stopWebhookServer(); } catch (e) { console.error('[quit] webhook.stop:', e); }
   try { memory.stop(); } catch (e) { console.error('[quit] memory.stop:', e); }
+  try { building.stop(); } catch (e) { console.error('[quit] building.stop:', e); }
   try { reflector.stop(); } catch (e) { console.error('[quit] reflector.stop:', e); }
   try { persist.close(); } catch (e) { console.error('[quit] persist.close:', e); }
   for (const rt of floorsByWcId.values()) {
@@ -4608,8 +4702,66 @@ ipcMain.handle('window:newFloor', (_evt, initialHome?: unknown) => {
 // ─── IPC: multiple floors (Building Tower & Discord-style Floor Rail) ───────
 ipcMain.handle('floors:list', (evt) => getFloorsSnapshotFor(evt.sender));
 
-ipcMain.handle('floors:open', (_evt, initialHome?: unknown) => {
-  const home = typeof initialHome === 'string' && initialHome.trim() ? initialHome.trim() : null;
+/** Where a candidate floor folder stands: git branch/dirty, and the floor that already holds it. */
+async function describeFloorFolder(rawPath: string): Promise<FloorFolderStatus> {
+  const abs = resolve(expandTilde(rawPath));
+  const owner = findFloorByHome(listFloorSummaries(), abs);
+  const base: FloorFolderStatus = {
+    path: abs,
+    exists: existsSync(abs),
+    kind: 'new',
+    lockedByFloor: owner?.floorNumber ?? null,
+    lockedByName: owner?.displayName ?? null
+  };
+  if (!base.exists) return base;
+  try {
+    if (await isRepo(abs)) {
+      const br = await getBranch(abs);
+      const st = await getStatus(abs);
+      const dirty = !('error' in st) && (st.staged.length + st.unstaged.length + st.untracked.length) > 0;
+      return { ...base, kind: 'git', branch: 'current' in br ? br.current : null, dirty };
+    }
+  } catch { /* fall through to a plain folder */ }
+  return { ...base, kind: 'folder' };
+}
+
+// New Floor flow: the next floor number + recent folders with live status (git branch,
+// dirty, or already owned by a floor: the one-folder-per-floor lock).
+ipcMain.handle('floors:newFloorInfo', async (): Promise<NewFloorInfo> => {
+  const floors = listFloorSummaries();
+  const recents = (readConfig().recentHives ?? []).filter((h): h is string => typeof h === 'string' && !!h).slice(0, 6);
+  return {
+    nextFloorNumber: nextFloorNumber(floors.map((f) => f.floorNumber)),
+    recents: await Promise.all(recents.map((h) => describeFloorFolder(h)))
+  };
+});
+
+ipcMain.handle('floors:inspectFolder', async (_evt, rawPath: unknown) => {
+  if (typeof rawPath !== 'string' || !rawPath.trim()) return null;
+  return describeFloorFolder(rawPath.trim());
+});
+
+ipcMain.handle('floors:browseFolder', async (evt) => {
+  const owner = BrowserWindow.fromWebContents(evt.sender);
+  const dialogOpts: Electron.OpenDialogOptions = {
+    title: 'Choose a folder for the new floor',
+    properties: ['openDirectory', 'createDirectory']
+  };
+  const res = owner ? await dialog.showOpenDialog(owner, dialogOpts) : await dialog.showOpenDialog(dialogOpts);
+  if (res.canceled || res.filePaths.length === 0) return null;
+  return res.filePaths[0];
+});
+
+/**
+ * Open a floor. Accepts the legacy bare-path form (`open(home)`) or the New Floor
+ * options object `{ home, name, squad }`. A folder another floor already holds is
+ * NEVER opened twice: that floor is focused instead (one-folder-per-floor lock).
+ */
+ipcMain.handle('floors:open', (_evt, arg?: unknown) => {
+  const opts = (arg && typeof arg === 'object' ? arg : { home: arg }) as Record<string, unknown>;
+  const home = typeof opts.home === 'string' && opts.home.trim() ? opts.home.trim() : null;
+  const name = sanitizeFloorName(opts.name);
+  const squad = isFloorSquadPreset(opts.squad) ? opts.squad : null;
   if (home) {
     const resolved = resolve(expandTilde(home));
     const existing = findFloorByHome(listFloorSummaries(), resolved);
@@ -4622,10 +4774,48 @@ ipcMain.handle('floors:open', (_evt, initialHome?: unknown) => {
       }
     }
   }
-  const win = openFloor(home);
+  const win = openFloor(home, { name, squad });
   if (!win) return { ok: false, error: 'Multi-window floors are disabled.' };
   const rt = floorsByWcId.get(win.webContents.id);
   return { ok: true, floorNumber: rt?.floorNumber ?? 1, focusedExisting: false };
+});
+
+// Rename a floor (any floor, from any window). Blank clears the alias back to the folder name.
+ipcMain.handle('floors:rename', (_evt, floorNumber: unknown, name: unknown) => {
+  if (typeof floorNumber !== 'number') return { ok: false, error: 'invalid floorNumber' };
+  const rt = [...floorsByWcId.values()].find((r) => r.floorNumber === floorNumber && !r.win.isDestroyed());
+  const home = rt ? floorHome(rt) : null;
+  if (!rt || !home) return { ok: false, error: 'floor not found' };
+  const saved = setFloorAlias(home, typeof name === 'string' ? name : null);
+  broadcastFloorsChanged();
+  return { ok: true, name: saved };
+});
+
+/** The starting squad for a freshly created floor: handed over ONCE, then forgotten. */
+ipcMain.handle('floors:takeSquad', (evt) => {
+  const fl = floorForWebContents(evt.sender);
+  if (!fl || fl.isPrimary) return null;
+  const squad = fl.pendingSquad;
+  fl.pendingSquad = null;
+  return squad;
+});
+
+/**
+ * Reset every agent on a floor: fresh session (cleared context) for each, with
+ * memory.md and the rest of the hive workspace untouched. The floor's own renderer
+ * owns the agent roster and the PTY restart path (it is what restarts a single agent
+ * with `resume: false`), so main just routes the request to the right window.
+ */
+ipcMain.handle('floors:resetAgents', (_evt, floorNumber: unknown) => {
+  if (typeof floorNumber !== 'number') return { ok: false, error: 'invalid floorNumber' };
+  const rt = [...floorsByWcId.values()].find((r) => r.floorNumber === floorNumber && !r.win.isDestroyed());
+  if (!rt || rt.win.webContents.isDestroyed()) return { ok: false, error: 'floor not found' };
+  try {
+    rt.win.webContents.send('floors:reset-agents');
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  return { ok: true, floorNumber };
 });
 
 ipcMain.handle('floors:focus', (_evt, floorNumber: unknown) => {
@@ -4662,7 +4852,8 @@ ipcMain.handle('floors:reportAgents', (evt, rawAgents: unknown) => {
         name: typeof a.name === 'string' ? a.name : 'Agent',
         character: typeof a.character === 'string' ? a.character : 'michael',
         status: typeof a.status === 'string' ? a.status : 'idle',
-        isOrchestrator: Boolean(a.isOrchestrator)
+        isOrchestrator: Boolean(a.isOrchestrator),
+        ...(typeof a.action === 'string' && a.action.trim() ? { action: a.action.slice(0, 200) } : {})
       }));
     broadcastFloorsChanged();
   }
@@ -6054,6 +6245,7 @@ function bootstrapHiveServices(): void {
     else console.error('[telemetry] collector failed to start:', r.error);
   });
   memory.start(); // init shared palace + mine loop (no-op without mempalace)
+  building.start(); // cross-floor palace: the only writer for the building-level index
   reflector.start(); // bound oversized memory.md files on a timer (no-op until threshold)
 
   armAlwaysOnBeats();

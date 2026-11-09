@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore, selectedAgent } from '@/store/store';
 import { loadModelCatalog } from '@/store/config';
 import { startMockLoop, stopMockLoop } from '@/store/mockEvents';
@@ -37,6 +37,8 @@ import { DEFAULT_THEME_ID } from '@shared/themePack';
 import { readViewScreenCollapsed, writeViewScreenCollapsed } from '@/components/viewScreenPreference';
 import { FloorRail } from '@/components/FloorRail';
 import { FloorsModal } from '@/components/FloorsModal';
+import { NewFloorModal } from '@/components/NewFloorModal';
+import { resetFloorAgents, seedFloorSquad } from '@/utils/floorAgents';
 import type { FloorAgentPreview, FloorsSnapshot } from '@shared/floors';
 
 // Injected at build time from package.json (see electron.vite.config.ts).
@@ -76,6 +78,11 @@ export function App() {
         return true;
       }
     } catch { /* localStorage unavailable — show the picker */ }
+    // A floor window already has its folder (chosen in New Floor); the picker is for the
+    // primary window's launch only. Showing it here put floor 1's folder up as "current".
+    try {
+      if (new URLSearchParams(window.location.search).has('floor') && window.cth?.harnessHomeSync?.()) return true;
+    } catch { /* fall through to the picker */ }
     return false;
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -93,7 +100,10 @@ export function App() {
   };
 
   const [floorsModalOpen, setFloorsModalOpen] = useState(false);
+  const [newFloorOpen, setNewFloorOpen] = useState(false);
+  const [floorNote, setFloorNote] = useState<string | null>(null);
   const [floorsSnapshot, setFloorsSnapshot] = useState<FloorsSnapshot | null>(null);
+  const lastReportedAgents = useRef('');
 
   // Subscribe to multi-window floors snapshot
   useEffect(() => {
@@ -120,10 +130,56 @@ export function App() {
       name: a.name,
       character: a.character,
       status: a.status,
-      isOrchestrator: a.isOrchestrator
+      isOrchestrator: a.isOrchestrator,
+      action: a.action
     }));
+    // `agents` changes on every progress tick; only tell main (which re-broadcasts to every
+    // floor) when something the Tower actually shows has changed.
+    const sig = JSON.stringify(previews);
+    if (sig === lastReportedAgents.current) return;
+    lastReportedAgents.current = sig;
     void window.cth.floors.reportAgents(previews);
   }, [agents]);
+
+  // Hire this floor's starting squad (chosen in New Floor). Main hands it over exactly once,
+  // so reloading the window never re-hires. Waits for the snapshot so the floor folder is known.
+  const squadTaken = useRef(false);
+  useEffect(() => {
+    if (squadTaken.current || !floorsSnapshot || !window.cth?.floors?.takeSquad) return;
+    squadTaken.current = true;
+    const me = floorsSnapshot.floors.find((f) => f.floorNumber === floorsSnapshot.currentFloorNumber);
+    void window.cth.floors.takeSquad().then(async (preset) => {
+      if (!preset || !me?.home) return;
+      const res = await seedFloorSquad(preset, me.home);
+      if (res.failures.length) setFloorNote(`Squad: hired ${res.hired}, ${res.failures.length} failed (${res.failures[0]})`);
+    }).catch(() => { /* best-effort */ });
+  }, [floorsSnapshot]);
+
+  // App menu → File → New Floor opens the same flow as the rail's "+".
+  useEffect(() => {
+    const off = window.cth?.floors?.onNewFloorRequested?.(() => setNewFloorOpen(true));
+    return () => { off?.(); };
+  }, []);
+
+  // "Reset all agents" for this floor, requested from any window's Building Tower.
+  useEffect(() => {
+    const off = window.cth?.floors?.onResetAgents?.(() => {
+      void resetFloorAgents().then((res) => {
+        setFloorNote(
+          res.failures.length
+            ? `Reset ${res.reset} agent${res.reset === 1 ? '' : 's'}; ${res.failures.length} failed (${res.failures[0]})`
+            : `Reset ${res.reset} agent${res.reset === 1 ? '' : 's'} with fresh sessions. Memory kept.`
+        );
+      });
+    });
+    return () => { off?.(); };
+  }, []);
+
+  useEffect(() => {
+    if (!floorNote) return;
+    const t = setTimeout(() => setFloorNote(null), 8000);
+    return () => clearTimeout(t);
+  }, [floorNote]);
 
   // Global hotkeys for Building Tower (Ctrl+B / Cmd+B) and New Floor (Ctrl+Shift+N / Cmd+Shift+N)
   useEffect(() => {
@@ -134,7 +190,7 @@ export function App() {
         setFloorsModalOpen((v) => !v);
       } else if (isMeta && e.shiftKey && e.key.toLowerCase() === 'n') {
         e.preventDefault();
-        void window.cth?.floors?.open?.();
+        setNewFloorOpen(true);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -386,7 +442,7 @@ export function App() {
               Floor {floorsSnapshot.currentFloorNumber}:
             </span>
             <span style={{ color: 'var(--cth-ink-700)', fontWeight: 600 }}>
-              {floorsSnapshot.floors.find((f) => f.floorNumber === floorsSnapshot.currentFloorNumber)?.folderName ?? 'Workspace'}
+              {floorsSnapshot.floors.find((f) => f.floorNumber === floorsSnapshot.currentFloorNumber)?.displayName ?? 'Workspace'}
             </span>
             {floorsSnapshot.floors.find((f) => f.floorNumber === floorsSnapshot.currentFloorNumber)?.displayPath && (
               <span style={{ color: 'var(--cth-ink-500)', fontSize: 10 }}>
@@ -548,8 +604,7 @@ export function App() {
           snapshot={floorsSnapshot}
           onOpenTower={() => setFloorsModalOpen(true)}
           onSelectFloor={(num) => { void window.cth?.floors?.focus?.(num); }}
-          onOpenRecentInNewFloor={(path) => { void window.cth?.floors?.open?.(path); }}
-          onNewFloor={() => { void window.cth?.floors?.open?.(); }}
+          onNewFloor={() => setNewFloorOpen(true)}
         />
 
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
@@ -692,14 +747,42 @@ export function App() {
             setFloorsModalOpen(false);
             void window.cth?.floors?.focus?.(num);
           }}
-          onNewFloor={(initialHome) => {
-            setFloorsModalOpen(false);
-            void window.cth?.floors?.open?.(initialHome);
-          }}
+          onNewFloor={() => setNewFloorOpen(true)}
           onCloseFloor={(num) => {
             void window.cth?.floors?.close?.(num);
           }}
+          onRenameFloor={(num, name) => { void window.cth?.floors?.rename?.(num, name); }}
+          onResetFloor={(num) => {
+            void window.cth?.floors?.resetAgents?.(num).then((r) => {
+              if (!r.ok) setFloorNote(`Could not reset Floor ${num}: ${r.error ?? 'unknown error'}`);
+            });
+          }}
         />
+      )}
+
+      {newFloorOpen && (
+        <NewFloorModal
+          onClose={() => setNewFloorOpen(false)}
+          onCreate={async (opts) => {
+            const res = await window.cth.floors.open(opts);
+            return { ok: res.ok, error: res.error };
+          }}
+        />
+      )}
+
+      {floorNote && (
+        <div
+          role="status"
+          onClick={() => setFloorNote(null)}
+          style={{
+            position: 'fixed', bottom: 18, left: '50%', transform: 'translateX(-50%)', zIndex: 400,
+            padding: '9px 16px', borderRadius: 8, background: '#211d19', border: '1px solid #3a342d',
+            color: '#e8e0d5', fontFamily: 'var(--cth-font-ui)', fontSize: 12.5, cursor: 'pointer',
+            boxShadow: '0 8px 22px rgba(0,0,0,0.5)'
+          }}
+        >
+          {floorNote}
+        </div>
       )}
 
       {addAgentOpen && (

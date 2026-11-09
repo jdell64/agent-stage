@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### v0.7.0: floors rework
+
+- **Every floor in one viewer.** The Building Tower (`Ctrl+B`) lists all floors stacked, each with
+  its agents, per-agent status, what the floor is doing right now, and Focus/Switch, rename, reset
+  and close. It updates live from every window.
+- **No phantom floors.** v0.6.0 drew every recent hive folder as a dimmed `F2`/`F3` tile in the rail
+  and an "open recent folder" row in the tower, so a one-floor building looked like three. Only real
+  floors render now; recent folders live in the New Floor flow.
+- **Name a floor.** Floors take an alias at creation and can be renamed later (kept per folder).
+- **New Floor flow.** Name, target folder (browse or recent repos with git status), the
+  one-folder-per-floor lock shown inline, and a starting squad (Standard, Minimal, Standby).
+- **Reset all agents on a floor.** Fresh session for every agent, `memory.md` and saved memories
+  kept, behind a confirm.
+- **Building memory.** A cross-floor shared memory layer (one notes file per floor plus one building
+  palace). See the PR for the design.
+
 ### Fork changes (agent-stage)
 
 - **The lead agent is the `orchestrator`.** The old agent id is gone from code, config keys
