@@ -15,6 +15,17 @@ describe('theme quips', () => {
     expect(picked).toBe('theme character');
   });
 
+  it('adds theme-wide lines for every character while keeping character lines scoped', () => {
+    expect(pickQuip([], {
+      anyone: ['raktajino time'],
+      byCharacter: { picard: ['Tea, Earl Grey, hot'] },
+    }, 'idle', 'troi', undefined, () => 0)).toBe('raktajino time');
+    expect(pickQuip([], {
+      anyone: ['raktajino time'],
+      byCharacter: { picard: ['Tea, Earl Grey, hot'] },
+    }, 'idle', 'picard', undefined, () => 0.99)).toBe('Tea, Earl Grey, hot');
+  });
+
   it('avoids repeating the previous line when alternatives exist', () => {
     expect(pickQuip(['same', 'other'], undefined, 'idle', 'picard', 'same', () => 0)).toBe('other');
     expect(pickQuip(['only'], undefined, 'idle', 'picard', 'only', () => 0)).toBe('only');

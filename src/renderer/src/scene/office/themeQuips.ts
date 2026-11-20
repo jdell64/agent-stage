@@ -71,7 +71,9 @@ export function shouldShowWorkingQuip(hasFreshActivity: boolean, random: () => n
   return !hasFreshActivity && random() < 0.2;
 }
 
-/** Pick from the existing generic pool plus the active theme's additions. */
+/** Pick from the caller's context pool, theme-wide lines, and character lines.
+ * Character-specific lines are only available to that character; `anyone` is
+ * the explicit cross-cast pool for authored theme banter. */
 export function pickQuip(
   genericLines: readonly string[],
   quips: ThemeQuips | undefined,
@@ -81,6 +83,7 @@ export function pickQuip(
   random: () => number = Math.random,
 ): string {
   const themed = [
+    ...(quips?.anyone ?? []),
     ...(quips?.byStatus?.[status] ?? []),
     ...(quips?.byCharacter && Object.prototype.hasOwnProperty.call(quips.byCharacter, character.toLowerCase())
       ? quips.byCharacter[character.toLowerCase()] ?? []
