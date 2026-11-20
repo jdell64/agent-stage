@@ -2071,6 +2071,26 @@ export class HiveManager {
     return true;
   }
 
+  /** Tell the author when the router had to quarantine an outbox file. The
+   * sender's inbox is the only durable feedback channel available to an agent;
+   * silently moving the file to `.sent/bad-*` leaves it unable to repair its
+   * message or retry the delivery. Keep parser details short and omit payloads.
+   */
+  private reportMalformedOutbox(senderId: string, filename: string, detail: string): void {
+    const detailText = detail.replace(/\s+/g, ' ').trim().slice(0, 240) || 'invalid JSON';
+    const msg = this.normalize({
+      to: senderId,
+      act: 'inform',
+      requires_reply: false,
+      subject: `[outbox rejected] ${filename}`,
+      body: `The router quarantined ${filename} as malformed JSON. Parse error: ${detailText}. `
+        + 'Write the message with a real JSON serializer and use forward-slash paths on Windows, then retry.'
+    }, 'system');
+    if (this.deliver(msg, senderId)) {
+      this.appendLog({ kind: 'outbox-malformed-notice', from: 'system', to: senderId, file: filename, id: msg.id });
+    }
+  }
+
   /** One harness bounce of `msg` to orchestrator: bump the hop counter, rewrite the
    *  subject, and log the drop once the counter passes HOP_CAP. Agents can't
    *  move hops past the cap themselves (normalize clamps what they wrote), so
@@ -2276,17 +2296,21 @@ export class HiveManager {
           let partial: Partial<HiveMessage>;
           try {
             partial = JSON.parse(raw) as Partial<HiveMessage>;
-          } catch {
+          } catch (error) {
             const repaired = repairLiteralLineBreaksInJsonStrings(raw);
             if (!repaired.changed) {
+              const detail = error instanceof Error ? error.message : String(error);
               this.appendLog({ kind: 'drop', reason: 'malformed-json', from: id, file: f });
+              this.reportMalformedOutbox(id, f, detail);
               try { renameSync(full, join(outbox, '.sent', `bad-${f}`)); } catch { /* noop */ }
               continue;
             }
             try {
               partial = JSON.parse(repaired.text) as Partial<HiveMessage>;
-            } catch {
+            } catch (repairError) {
+              const detail = repairError instanceof Error ? repairError.message : String(repairError);
               this.appendLog({ kind: 'drop', reason: 'malformed-json', from: id, file: f });
+              this.reportMalformedOutbox(id, f, detail);
               try { renameSync(full, join(outbox, '.sent', `bad-${f}`)); } catch { /* noop */ }
               continue;
             }
