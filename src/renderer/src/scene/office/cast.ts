@@ -12,12 +12,14 @@ import {
   normalizeCharacter, LEGACY_CHARACTER_ALIASES, DEFAULT_CHARACTER, ORCHESTRATOR_CHARACTER,
   type CharacterName
 } from './characters';
+import { normalizeCastDisplayName } from '@shared/castMetadata';
 
 export { DEFAULT_CHARACTER, ORCHESTRATOR_CHARACTER, normalizeCharacter, type CharacterName };
 
 export interface CastMember {
   name: CharacterName;
   displayName: string;
+  pronouns?: string;
   /** Signature accent color (hex) — used for the in-scene selection glow. */
   shirt: string;
   /** Blurb shown when this character is picked / has no description yet. */

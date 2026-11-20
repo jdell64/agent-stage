@@ -29,6 +29,7 @@ import {
 import { SCENE_W, SCENE_H } from './portraitArt';
 import { type as FontStacks } from '@/design/tokens';
 import { setAppTheme } from '@/design/theme';
+import { normalizeCastDisplayName, normalizePronouns } from '@shared/castMetadata';
 
 
 /** Track created object URLs per theme to allow cleanup if needed. */
@@ -86,7 +87,7 @@ function buildDiskThemeCast(
   const castFile = payload.files['cast/cast.json'];
   if (!castFile) return null;
 
-  let roster: Array<{ name: string; displayName: string; shirt: string; blurb: string }>;
+  let roster: Array<{ name: string; displayName?: string; pronouns?: string; shirt: string; blurb: string }>;
   try {
     roster = JSON.parse(new TextDecoder('utf-8').decode(castFile));
     if (!Array.isArray(roster) || roster.length === 0) return null;
@@ -98,7 +99,8 @@ function buildDiskThemeCast(
   for (const m of roster) {
     byName[m.name] = {
       name: m.name as any,
-      displayName: m.displayName || m.name,
+      displayName: normalizeCastDisplayName(m.displayName, m.name),
+      pronouns: normalizePronouns(m.pronouns),
       shirt: m.shirt || '#888888',
       blurb: m.blurb || '',
     };

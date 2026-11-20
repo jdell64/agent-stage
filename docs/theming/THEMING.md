@@ -137,10 +137,12 @@ More than 5% of tile ids not covered by any tileset rejects the pack.
 
 ## Cast (optional)
 
-`cast/cast.json` is an array of `{ "name", "displayName", "shirt", "blurb" }`. `name` is letters,
+`cast/cast.json` is an array of `{ "name", "displayName", "pronouns", "shirt", "blurb" }`. `name` is letters,
 digits, `-` or `_`. Add `cast/sprites/<name>.png`, 108x32: six 18x32 frames (front stand, step L,
 step R, then the same three from behind). A missing sprite falls back to a drawn character and
-produces a warning, not an error. Without `cast.json` the built-in roster is used.
+produces a warning, not an error. Without `cast.json` the built-in roster is used. Rank prefixes are
+removed from display names at load time; `Nurse Ogawa` is displayed as `Keiko`; `pronouns` is an
+optional compact label such as `she/her`.
 
 ## Limits
 
