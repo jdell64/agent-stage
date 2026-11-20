@@ -11,6 +11,7 @@ export interface FloorsModalProps {
   onNewFloor: () => void;
   onCloseFloor: (floorNumber: number) => void;
   onRenameFloor: (floorNumber: number, name: string) => void;
+  onReorderFloors: (floorNumbers: number[]) => void;
   /** Fresh session for every agent on the floor (memory.md kept). Already confirmed by the modal. */
   onResetFloor: (floorNumber: number) => void;
 }
@@ -40,11 +41,11 @@ export function FloorsModal({
   onNewFloor,
   onCloseFloor,
   onRenameFloor,
+  onReorderFloors,
   onResetFloor
 }: FloorsModalProps) {
   const currentFloorNumber = snapshot?.currentFloorNumber ?? 1;
-  // Highest floor on top, like a real tower.
-  const floors = [...(snapshot?.floors ?? [])].sort((a, b) => b.floorNumber - a.floorNumber);
+  const floors = snapshot?.floors ?? [];
 
   const [selected, setSelected] = useState<number>(currentFloorNumber);
   const [menuFor, setMenuFor] = useState<number | null>(null);
@@ -54,6 +55,20 @@ export function FloorsModal({
   const renameRef = useRef<HTMLInputElement | null>(null);
   // Escape cancels a rename, but unmounting the focused input also fires blur; this latch stops that blur saving it.
   const skipCommit = useRef(false);
+  const draggedFloor = useRef<number | null>(null);
+
+  const reorderFloor = (targetFloorNumber: number) => {
+    const sourceFloorNumber = draggedFloor.current;
+    draggedFloor.current = null;
+    if (sourceFloorNumber === null || sourceFloorNumber === targetFloorNumber) return;
+    const numbers = floors.map((floor) => floor.floorNumber);
+    const sourceIndex = numbers.indexOf(sourceFloorNumber);
+    const targetIndex = numbers.indexOf(targetFloorNumber);
+    if (sourceIndex < 0 || targetIndex < 0) return;
+    numbers.splice(sourceIndex, 1);
+    numbers.splice(targetIndex, 0, sourceFloorNumber);
+    onReorderFloors(numbers);
+  };
 
   const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
   const shortcutLabel = isMac ? '⌘ ⇧ N' : 'Ctrl ⇧ N';
@@ -225,6 +240,8 @@ export function FloorsModal({
                 key={fl.floorNumber}
                 data-floor={fl.floorNumber}
                 onClick={() => setSelected(fl.floorNumber)}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => { event.preventDefault(); reorderFloor(fl.floorNumber); }}
                 style={{
                   position: 'relative',
                   borderRadius: 10,
@@ -264,6 +281,22 @@ export function FloorsModal({
 
                 {/* Row header */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                  <button
+                    type="button"
+                    draggable
+                    aria-label={`Drag to reorder Floor ${fl.floorNumber}`}
+                    title="Drag to reorder"
+                    onClick={(event) => event.stopPropagation()}
+                    onDragStart={(event) => {
+                      draggedFloor.current = fl.floorNumber;
+                      event.dataTransfer.effectAllowed = 'move';
+                      event.dataTransfer.setData('text/plain', String(fl.floorNumber));
+                    }}
+                    onDragEnd={() => { draggedFloor.current = null; }}
+                    style={{ ...iconBtn, cursor: 'grab', touchAction: 'none' }}
+                  >
+                    ⠿
+                  </button>
                   <span style={floorPill(isCurrent)}>Floor {fl.floorNumber}</span>
 
                   {renaming === fl.floorNumber ? (

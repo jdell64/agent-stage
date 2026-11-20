@@ -78,6 +78,10 @@ HIVE.md · SPEC.md · DESIGN.md   multi-agent · terminal/event · visual design
 docs/message-queue.md        who may type into an agent's terminal, and when
 ```
 
+The Building Tower's floor order is stored in the SQLite `kv` table by normalized
+workspace path, so drag ordering survives window close/reopen and floor numbers
+being reassigned. A newly opened workspace is appended after the saved floors.
+
 <div align="right">(<a href="#munder-difflin">↑ back to top</a>)</div>
 
 ## Design system

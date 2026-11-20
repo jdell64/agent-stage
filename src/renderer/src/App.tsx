@@ -754,6 +754,7 @@ export function App() {
             void window.cth?.floors?.close?.(num);
           }}
           onRenameFloor={(num, name) => { void window.cth?.floors?.rename?.(num, name); }}
+          onReorderFloors={(numbers) => { void window.cth?.floors?.reorder?.(numbers); }}
           onResetFloor={(num) => {
             void window.cth?.floors?.resetAgents?.(num).then((r) => {
               if (!r.ok) setFloorNote(`Could not reset Floor ${num}: ${r.error ?? 'unknown error'}`);
