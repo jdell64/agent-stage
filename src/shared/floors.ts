@@ -253,6 +253,27 @@ export function normalizeHivePath(
   return platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
+/** Sanitize the saved secondary-floor homes before opening them at app startup. */
+export function restorableFloorHomes(
+  saved: unknown,
+  primaryHome: string | null | undefined,
+  platform: NodeJS.Platform = hostPlatform()
+): string[] {
+  if (!Array.isArray(saved)) return [];
+  const primary = normalizeHivePath(primaryHome, platform);
+  const seen = new Set<string>();
+  const homes: string[] = [];
+  for (const candidate of saved) {
+    if (typeof candidate !== 'string' || !candidate.trim()) continue;
+    const home = candidate.trim();
+    const key = normalizeHivePath(home, platform);
+    if (!key || key === primary || seen.has(key)) continue;
+    seen.add(key);
+    homes.push(home);
+  }
+  return homes;
+}
+
 /**
  * Check if pathA is nested within pathB or vice versa (or identical).
  */

@@ -12,6 +12,7 @@ import {
   squadWorkers,
   floorOrderKey,
   orderFloorSummaries,
+  restorableFloorHomes,
   FLOOR_SQUADS,
   FLOOR_NAME_MAX
 } from '../../src/shared/floors';
@@ -70,6 +71,23 @@ describe('persisted floor ordering', () => {
     expect(orderFloorSummaries(current, saved).map((floor) => floor.home)).toEqual([
       '/work/api', '/work/new', '/work/web', '/work/main'
     ]);
+  });
+});
+
+describe('startup floor restoration', () => {
+  it('keeps saved order, excludes the primary home and ignores malformed or duplicate entries', () => {
+    expect(restorableFloorHomes([
+      'C:/work/alpha',
+      'c:\\work\\ALPHA',
+      null,
+      '',
+      'C:/work/main',
+      'C:/work/beta'
+    ], 'c:\\work\\main', 'win32')).toEqual(['C:/work/alpha', 'C:/work/beta']);
+  });
+
+  it('treats invalid saved data as no secondary floors', () => {
+    expect(restorableFloorHomes({ home: '/work/alpha' }, '/work/main')).toEqual([]);
   });
 });
 
