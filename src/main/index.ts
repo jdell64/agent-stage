@@ -6380,7 +6380,6 @@ ipcMain.handle('workers:stop', (_evt, workerId: string): { ok: boolean; error?: 
  *  (config:changeHome tears these down before copying). No-op without a home. */
 function bootstrapHiveServices(): void {
   if (!hive.enabled()) return;
-  hive.ensureHive();
   const root = hive.root();
   if (!root) return;
   const acquired = acquireHiveInstanceLock(root);
@@ -6391,6 +6390,7 @@ function bootstrapHiveServices(): void {
     return;
   }
   hiveInstanceLock = acquired.lock;
+  hive.ensureHive();
   hive.refreshGeneratedDocs();
   // Tell the hive what it is running inside, BEFORE anything spawns: the prompt
   // builder reads this, so an agent spawned earlier would never learn it.
@@ -6741,8 +6741,6 @@ app.whenReady().then(() => {
 // before-quit covers Cmd-Q / dock-quit; the per-window close handler covers
 // the red close button. Both routes hit the same warning UX.
 app.on('before-quit', (e) => {
-  hiveInstanceLock?.release();
-  hiveInstanceLock = null;
   if (allowQuit) return;
   const count = ptyManager.list().length;
   if (count === 0) return;
@@ -6783,6 +6781,8 @@ let willQuitHandled = false;
 app.on('will-quit', (e) => {
   if (willQuitHandled) return;
   willQuitHandled = true;
+  hiveInstanceLock?.release();
+  hiveInstanceLock = null;
   e.preventDefault();
   try { hive.closeAppendFiles(); } catch { /* rows are on disk */ }
   app.exit(0);
