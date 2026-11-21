@@ -2,6 +2,21 @@ import type { AgentProvider } from './agentProvider';
 
 export type InterruptProvider = AgentProvider | undefined;
 
+export interface InterruptResult {
+  ok: boolean;
+  error?: string;
+}
+
+/** Bind a hive's orchestrator interrupt route to that floor's PTY ownership. */
+export function installScopedInterruptHandler<THive, TOwner>(
+  hive: { setInterruptHandler(handler: (agentId: string) => InterruptResult): void },
+  ptyToAgent: Map<string, string>,
+  owner: () => TOwner,
+  execute: (agentId: string, hive: THive, ptyToAgent: Map<string, string>, owner: TOwner) => InterruptResult
+): void {
+  hive.setInterruptHandler((agentId) => execute(agentId, hive as THive, ptyToAgent, owner()));
+}
+
 /** Claude stops the active turn with Escape; other interactive engines use one Ctrl+C. */
 export function interruptKeyForProvider(provider: InterruptProvider): string {
   return provider === 'claude' ? '\u001b' : '\u0003';
