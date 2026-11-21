@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, nativeImage, ipcMain, Menu, powerMonitor, powerSaveBlocker, screen, shell, Notification } from 'electron';
+import { app, BrowserWindow, WebContentsView, clipboard, dialog, nativeImage, ipcMain, Menu, powerMonitor, powerSaveBlocker, screen, shell, Notification } from 'electron';
 import { spawn, execFile } from 'node:child_process';
 import {
   rmSync, existsSync, readFileSync, readdirSync, statSync, cpSync, writeFileSync,
@@ -10,6 +10,7 @@ import { join, resolve, sep, basename, dirname, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { request as httpsRequest } from 'node:https';
 import { PtyManager, type SpawnOptions } from './pty';
+import { cleanupSecondaryFloorAfterContentsGone, registerSecondaryFloorGoneHandlers } from './floorRuntimeLifecycle';
 import { resolveCommand as resolveCliCommand, isSafeCommandName } from './shellEnv';
 import { initAutoUpdater, abortPendingRestart } from './updater';
 import { RealtimeFloorWatcher } from './realtimeFloorWatcher';
@@ -276,7 +277,7 @@ const pendingInstallRelaunch = new Map<string, { opts: AgentSpawnOptions; owner:
 const hive = new HiveManager(
   () => process.env.MD_HIVE_ROOT || readConfig().harnessHome,
   (channel, payload) => {
-    const wc = liveWebContents();
+    const wc = primaryWebContents();
     if (!wc) return false;
     try { wc.send(channel, payload); return true; } catch { return false; }
   }
@@ -294,7 +295,7 @@ const control = new ControlRegistry();
 // over loopback OTLP/JSON and exposes the locked usage-provider seam. resolveCwd
 // lets the transcript fallback find an agent's cwd from the hive registry.
 const telemetry = new TelemetryCollector({
-  emit: (channel, payload) => { try { liveWebContents()?.send(channel, payload); } catch { /* window tore down */ } },
+  emit: (channel, payload) => { try { primaryWebContents()?.send(channel, payload); } catch { /* window tore down */ } },
   resolveCwd: (agentId) => hive.registry().agents[agentId]?.cwd ?? null,
   // D11: scopes the transcript fallback to this agent's own session instead of
   // summing every transcript in a (routinely shared) cwd.
@@ -350,7 +351,7 @@ const workerWake = new WorkerWakeWatchdog();
 // hook returns) AND Jim's breaker (feed recordToolUse on each PostToolUse).
 const hookServer = new HookServer(
   hive,
-  () => liveWebContents(),
+  () => primaryWebContents(),
   () => readConfig(),
   control,
   breaker,
@@ -404,24 +405,21 @@ const reflector = new MemoryReflector(
 // Durable harness state (SQLite, main process). Phase A: window bounds (kv) +
 // net-new command history. Opened in whenReady, closed in the teardown blocks.
 const persist = new PersistStore();
-/** The PRIMARY window — the one running the hive/orchestrator orchestration and the sink
- *  for process-global timer events (missions, breaker, Slack ingestion). It is
- *  the most-recently-focused live window, so global events follow the user.
- *  Additional "floor" windows are tracked in `allWindows` below. */
+/** The single host window. Floor 1 uses its main renderer; other floors are
+ *  isolated WebContentsViews attached to this window. */
 let mainWindow: BrowserWindow | null = null;
-/** Every open window (primary + floors). A registry, not a single handle, so
- *  multi-window lifecycle (focus tracking, quit fan-out) is correct. */
-const allWindows = new Set<BrowserWindow>();
-/** Monotonic floor counter → a stable, unique session partition per floor so
- *  each floor's renderer state (localStorage: agents, queues, selection) is
- *  isolated from every other window's. */
+/** Monotonic floor counter → a unique session partition per floor renderer. */
 let floorSeq = 0;
 
-/** Per-window Floor runtime context so secondary Floor windows have their own
- *  isolated hive folder, roster, hook pipe, memory palace, and agent lineup. */
+/** Per-floor runtime context; each renderer retains isolated hive/store/PTY state. */
 interface FloorRuntime {
   floorNumber: number;
+  /** Host window for every floor; secondary floors render in an embedded view. */
   win: BrowserWindow;
+  /** Renderer instance owned by this floor, primary or embedded. */
+  webContents: Electron.WebContents;
+  /** Secondary floor surface, attached to the single host window. */
+  view: WebContentsView | null;
   wcId: number;
   isPrimary: boolean;
   home: string | null;
@@ -441,14 +439,46 @@ interface FloorRuntime {
 
 const floorsByWcId = new Map<number, FloorRuntime>();
 let restoringFloors = false;
+let activeFloorWcId = 0;
+
+function resizeFloorViews(win: BrowserWindow): void {
+  if (win.isDestroyed()) return;
+  const [width, height] = win.getContentSize();
+  for (const rt of floorsByWcId.values()) {
+    if (rt.win === win && rt.view && !rt.webContents.isDestroyed()) {
+      rt.view.setBounds({ x: 0, y: 0, width, height });
+    }
+  }
+}
+
+function activateFloor(rt: FloorRuntime): void {
+  if (rt.win.isDestroyed() || rt.webContents.isDestroyed()) return;
+  const host = rt.win;
+  if (host.isMinimized()) host.restore();
+  for (const candidate of floorsByWcId.values()) {
+    if (candidate.win !== host) continue;
+    candidate.view?.setVisible(candidate.wcId === rt.wcId);
+  }
+  activeFloorWcId = rt.wcId;
+  resizeFloorViews(host);
+  host.setTitle(formatFloorWindowTitle(
+    rt.floorNumber,
+    floorsByWcId.size,
+    floorHome(rt),
+    floorAliasFor(floorHome(rt))
+  ));
+  host.focus();
+  rt.webContents.focus();
+}
 
 function createSecondaryFloorRuntime(
   win: BrowserWindow,
+  wc: Electron.WebContents,
+  view: WebContentsView | null,
   floorNumber: number,
   initialHome: string | null,
   squad: FloorSquadPreset | null = null
 ): FloorRuntime {
-  const wc = win.webContents;
   const wcId = wc.id;
   const runtimeRef: { current: FloorRuntime | null } = { current: null };
   const getHome = () => runtimeRef.current?.home ?? null;
@@ -515,6 +545,8 @@ function createSecondaryFloorRuntime(
   const rt: FloorRuntime = {
     floorNumber,
     win,
+    webContents: wc,
+    view,
     wcId,
     isPrimary: false,
     home: initialHome ? resolve(expandTilde(initialHome)) : null,
@@ -578,6 +610,10 @@ function floorForWebContents(wc?: Electron.WebContents | null): FloorRuntime | n
     if (rt.isPrimary) return rt;
   }
   return floorsByWcId.values().next().value ?? null;
+}
+
+function ownerWindowForContents(wc: Electron.WebContents): BrowserWindow | null {
+  return floorForWebContents(wc)?.win ?? BrowserWindow.fromWebContents(wc);
 }
 
 /** Find which floor owns a given PTY id by checking each floor's ptyToAgent. */
@@ -676,7 +712,7 @@ function summarizeFloor(rt: FloorRuntime): FloorSummary {
 
 function listFloorSummaries(): FloorSummary[] {
   const floors = [...floorsByWcId.values()]
-    .filter((rt) => !rt.win.isDestroyed())
+    .filter((rt) => !rt.win.isDestroyed() && !rt.webContents.isDestroyed())
     .sort((a, b) => a.floorNumber - b.floorNumber)
     .map(summarizeFloor);
   const savedOrder = persist.getKv<unknown>('floors.order');
@@ -697,14 +733,11 @@ function persistOpenFloors(): void {
 
 function syncFloorWindowTitles(): void {
   const summaries = listFloorSummaries();
-  const total = summaries.length;
-  for (const rt of floorsByWcId.values()) {
-    if (rt.win.isDestroyed()) continue;
-    const home = floorHome(rt);
-    try {
-      rt.win.setTitle(formatFloorWindowTitle(rt.floorNumber, total, home, floorAliasFor(home)));
-    } catch { /* window closing */ }
-  }
+  const rt = floorsByWcId.get(activeFloorWcId) ?? [...floorsByWcId.values()].find((floor) => floor.isPrimary);
+  if (!rt || rt.win.isDestroyed()) return;
+  const home = floorHome(rt);
+  try { rt.win.setTitle(formatFloorWindowTitle(rt.floorNumber, summaries.length, home, floorAliasFor(home))); }
+  catch { /* window closing */ }
 }
 
 function getFloorsSnapshotFor(wc?: Electron.WebContents | null): FloorsSnapshot {
@@ -721,10 +754,9 @@ function getFloorsSnapshotFor(wc?: Electron.WebContents | null): FloorsSnapshot 
 function broadcastFloorsChanged(): void {
   syncFloorWindowTitles();
   for (const rt of floorsByWcId.values()) {
-    if (rt.win.isDestroyed() || rt.win.webContents.isDestroyed()) continue;
-    try {
-      rt.win.webContents.send('floors:changed', getFloorsSnapshotFor(rt.win.webContents));
-    } catch { /* window gone */ }
+    if (rt.win.isDestroyed() || rt.webContents.isDestroyed()) continue;
+    try { rt.webContents.send('floors:changed', getFloorsSnapshotFor(rt.webContents)); }
+    catch { /* renderer gone */ }
   }
 }
 
@@ -894,7 +926,7 @@ function teardownPty(id: string, opts?: { preserveWorktree?: boolean }, owner?: 
   // the renderer's archiveAgent is a no-op if the card is already gone). NOT
   // done for regular agents: their kill flows already manage their own card.
   if (wasWorker) {
-    try { liveWebContents()?.send('hive:agentArchived', { id }); } catch { /* window torn down */ }
+    try { (fl?.webContents && !fl.webContents.isDestroyed() ? fl.webContents : liveWebContents())?.send('hive:agentArchived', { id }); } catch { /* window torn down */ }
   }
   syncKeepAwake();
 }
@@ -1888,14 +1920,20 @@ function armHeartbeat(m: ScheduledMission): void {
  *  callbacks are still in flight, and `.send()` on a destroyed webContents
  *  throws "Object has been destroyed" (the main-process crash dialog). */
 function liveWebContents(): Electron.WebContents | null {
-  const wc = mainWindow?.webContents;
+  const wc = floorsByWcId.get(activeFloorWcId)?.webContents;
   if (wc && !wc.isDestroyed()) return wc;
-  // Primary gone (closed/destroyed): fall back to any other live window so a
-  // global event still reaches a renderer instead of being silently dropped.
-  for (const w of allWindows) {
-    if (!w.isDestroyed() && !w.webContents.isDestroyed()) return w.webContents;
+  for (const rt of floorsByWcId.values()) {
+    if (!rt.win.isDestroyed() && !rt.webContents.isDestroyed()) return rt.webContents;
   }
   return null;
+}
+
+/** Renderer for Floor 1's process-wide HiveManager, when its surface exists. */
+function primaryWebContents(): Electron.WebContents | null {
+  const primary = [...floorsByWcId.values()].find((rt) => rt.isPrimary)?.webContents;
+  if (primary && !primary.isDestroyed()) return primary;
+  const wc = mainWindow?.webContents;
+  return wc && !wc.isDestroyed() ? wc : null;
 }
 
 // ─── Slack webhook server (Slack message → the orchestrator's queue) ──────────────────
@@ -2704,16 +2742,6 @@ function debounce(fn: () => void, ms: number): () => void {
 
 /** Cascade a new floor off the focused window so it doesn't stack exactly on
  *  top, clamped on-screen (clampBounds drops an off-display position). */
-function floorCascade(): WindowBounds | null {
-  const base = (mainWindow && !mainWindow.isDestroyed())
-    ? mainWindow
-    : [...allWindows].find((w) => !w.isDestroyed());
-  if (!base) return null;
-  const b = base.getBounds();
-  const OFFSET = 36;
-  return clampBounds({ x: b.x + OFFSET, y: b.y + OFFSET, width: b.width, height: b.height });
-}
-
 // ─── Shareable hires: munderdifflin:// deep link + file import ──────────────
 // A hire manifest NEVER auto-spawns: it is validated, then handed to the
 // renderer, which pre-fills the Add-Agent modal for human review. See
@@ -2827,26 +2855,14 @@ ipcMain.handle('hire:openFile', async () => {
   };
 });
 
-/**
- * Create a window. The PRIMARY window (no opts) restores saved geometry, uses
- * the default session, runs the hive, and keeps the existing app-quit warning.
- * A FLOOR window (`{ floor: true }`) gets its own persistent session partition
- * — isolating its renderer state (agents/queues/selection) from every other
- * window — cascades its position, and on close stops only its OWN terminals
- * while the app keeps running.
- */
-function createWindow(opts: { floor?: boolean; initialHome?: string | null; name?: string | null; squad?: FloorSquadPreset | null } = {}): BrowserWindow {
-  const isFloor = opts.floor === true;
+/** Create the one host BrowserWindow. Secondary floors are child views. */
+function createWindow(): BrowserWindow {
   const iconPath = appWindowIconPath();
-  const floorNumber = isFloor
-    ? nextFloorNumber([...floorsByWcId.values()].map((r) => r.floorNumber))
-    : 1;
 
-  // Primary restores saved geometry; floors cascade off the focused window.
+  // The host window restores its saved geometry.
   let saved: WindowBounds | null = null;
-  if (!isFloor) { try { saved = clampBounds(persist.getKv('window.bounds')); } catch { saved = null; } }
-  const cascade = isFloor ? floorCascade() : null;
-  const geom = cascade ?? saved;
+  try { saved = clampBounds(persist.getKv('window.bounds')); } catch { saved = null; }
+  const geom = saved;
 
   const win = new BrowserWindow({
     icon: iconPath,
@@ -2855,7 +2871,7 @@ function createWindow(opts: { floor?: boolean; initialHome?: string | null; name
     ...(geom && geom.x !== undefined && geom.y !== undefined ? { x: geom.x, y: geom.y } : {}),
     minWidth: MIN_WIN.width,
     minHeight: MIN_WIN.height,
-    title: isFloor ? `Agent Stage — Floor ${floorNumber}` : 'Agent Stage',
+    title: 'Agent Stage',
     backgroundColor: '#FFF8E7',
     titleBarStyle: 'hiddenInset',
     show: false,
@@ -2871,10 +2887,6 @@ function createWindow(opts: { floor?: boolean; initialHome?: string | null; name
       // — incl. behind the LOCK SCREEN — which silently stalls the hive while
       // the user is away. Don't.
       backgroundThrottling: false,
-      // Each floor gets its OWN persistent session partition → isolated
-      // localStorage so floors never share or stomp each other's office state.
-      // The primary keeps the DEFAULT session so existing persisted state loads.
-      ...(isFloor ? { partition: `persist:floor-${++floorSeq}` } : {})
     }
   });
 
@@ -2883,43 +2895,31 @@ function createWindow(opts: { floor?: boolean; initialHome?: string | null; name
   const wc = win.webContents;
   const wcId = wc.id;
 
-  if (!isFloor) {
-    floorsByWcId.set(wcId, {
-      floorNumber: 1,
-      win,
-      wcId,
-      isPrimary: true,
-      home: process.env.MD_HIVE_ROOT || readConfig().harnessHome || null,
-      hive,
-      roster,
-      control,
-      breaker,
-      hookServer,
-      memory,
-      reflector,
-      ptyToAgent,
-      reportedAgents: [],
-      pendingSquad: null
-    });
-  } else {
-    const rt = createSecondaryFloorRuntime(win, floorNumber, opts.initialHome ?? null, opts.squad ?? null);
-    floorsByWcId.set(wcId, rt);
-    // Name the floor at creation. Stored by folder so it survives close/reopen and is
-    // never inherited by whichever floor reuses this floor NUMBER later.
-    if (opts.name && rt.home) setFloorAlias(rt.home, opts.name);
-    if (rt.home) {
-      ensureHarnessHome(rt.home);
-      bootstrapSecondaryFloorServices(rt);
-    }
-  }
+  floorsByWcId.set(wcId, {
+    floorNumber: 1,
+    win,
+    webContents: wc,
+    view: null,
+    wcId,
+    isPrimary: true,
+    home: process.env.MD_HIVE_ROOT || readConfig().harnessHome || null,
+    hive,
+    roster,
+    control,
+    breaker,
+    hookServer,
+    memory,
+    reflector,
+    ptyToAgent,
+    reportedAgents: [],
+    pendingSquad: null
+  });
+  activeFloorWcId = wcId;
+  wc.on('focus', () => { activeFloorWcId = wcId; });
 
-  allWindows.add(win);
-  if (isFloor) persistOpenFloors();
   broadcastFloorsChanged();
-  // Global timer events follow the user — the most-recently-focused window is
-  // primary. The primary is also seeded synchronously so boot events route now.
-  win.on('focus', () => { mainWindow = win; });
-  if (!isFloor) mainWindow = win;
+  mainWindow = win;
+  win.on('resize', () => resizeFloorViews(win));
 
   // Permission gate for the renderer (our own trusted, local content). The only
   // permission we constrain is microphone capture: it's allowed ONLY while a mic
@@ -2950,21 +2950,18 @@ function createWindow(opts: { floor?: boolean; initialHome?: string | null; name
     return true;
   });
 
-  // Only the primary persists geometry (kv `window.bounds`); floors cascade
-  // fresh each launch. Skip while maximized/minimized so a restore doesn't save
-  // the fullscreen rect.
-  if (!isFloor) {
-    const saveBounds = debounce(() => {
-      if (win.isDestroyed() || win.isMinimized() || win.isMaximized()) return;
-      try { persist.setKv('window.bounds', win.getBounds()); } catch { /* DB best-effort */ }
-    }, 400);
-    win.on('resized', saveBounds);
-    win.on('moved', saveBounds);
-    win.on('close', () => {
-      if (win.isDestroyed() || win.isMinimized() || win.isMaximized()) return;
-      try { persist.setKv('window.bounds', win.getBounds()); } catch { /* DB best-effort */ }
-    });
-  }
+  // Persist host geometry (kv `window.bounds`). Skip while maximized/minimized
+  // so a restore doesn't save the fullscreen rect.
+  const saveBounds = debounce(() => {
+    if (win.isDestroyed() || win.isMinimized() || win.isMaximized()) return;
+    try { persist.setKv('window.bounds', win.getBounds()); } catch { /* DB best-effort */ }
+  }, 400);
+  win.on('resized', saveBounds);
+  win.on('moved', saveBounds);
+  win.on('close', () => {
+    if (win.isDestroyed() || win.isMinimized() || win.isMaximized()) return;
+    try { persist.setKv('window.bounds', win.getBounds()); } catch { /* DB best-effort */ }
+  });
 
 
   // Taskbar identity (Windows): tie the button to our AppUserModelID and .ico so
@@ -2998,66 +2995,40 @@ function createWindow(opts: { floor?: boolean; initialHome?: string | null; name
   // intercept it the same way before-quit does so PTY users aren't surprised.
   win.on('close', (e) => {
     if (allowQuit) return;
-    if (isFloor) {
-      // A floor's close is NOT an app quit — confirm only its OWN terminals,
-      // via a self-contained native dialog (no renderer modal). Confirming lets
-      // the window close; its PTYs are stopped in the 'closed' handler.
-      const owned = ptyManager.countByOwner(wc);
-      if (owned > 0) {
-        const choice = dialog.showMessageBoxSync(win, {
-          type: 'warning',
-          buttons: ['Close floor', 'Cancel'],
-          defaultId: 1,
-          cancelId: 1,
-          message: `Close this floor? ${owned} running terminal${owned === 1 ? '' : 's'} on it will be stopped.`,
-          detail: 'Other floors keep running.'
-        });
-        if (choice === 1) e.preventDefault();
-      }
-      return;
-    }
     // Primary window: existing app-wide quit warning (renderer modal).
     const count = ptyManager.list().length;
     if (count === 0) return;
     e.preventDefault();
     win.focus();
-    wc.send('app:closeRequested', { ptyCount: count });
+    (liveWebContents() ?? wc).send('app:closeRequested', { ptyCount: count });
   });
 
   // The primary is the default PTY sink; floors route purely by per-PTY owner.
-  if (!isFloor) ptyManager.attachWebContents(wc);
+  ptyManager.attachWebContents(wc);
 
   // A main-frame reload unmounts the renderer's hire subscription — queue again
   // until the fresh renderer drains. Guard on isMainFrame: a stray sub-frame
   // navigation must NOT flip readiness off (the renderer only drains on mount,
   // so a later deep link would otherwise queue and sit until a full reload).
-  win.webContents.on('did-start-navigation', (details) => {
+  wc.on('did-start-navigation', (details) => {
     if (details.isMainFrame) rendererReadyForHires = false;
   });
 
-  if (isDev && process.env.ELECTRON_RENDERER_URL) {
-    // A floor window is told it is one (`?floor=N`) so its renderer skips the launch-time
-    // hive picker: the floor's folder is already chosen (New Floor / floors:open).
-    win.loadURL(isFloor ? `${process.env.ELECTRON_RENDERER_URL}${process.env.ELECTRON_RENDERER_URL.includes('?') ? '&' : '?'}floor=${floorNumber}` : process.env.ELECTRON_RENDERER_URL);
-  } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'), isFloor ? { query: { floor: String(floorNumber) } } : undefined);
-  }
+  if (isDev && process.env.ELECTRON_RENDERER_URL) win.loadURL(process.env.ELECTRON_RENDERER_URL);
+  else win.loadFile(join(__dirname, '../renderer/index.html'));
 
   win.on('closed', () => {
-    allWindows.delete(win);
-    const rt = floorsByWcId.get(wcId);
-    if (rt && !rt.isPrimary) {
-      stopSecondaryFloorServices(rt);
+    for (const rt of [...floorsByWcId.values()]) {
+      if (rt.win !== win) continue;
+      if (!rt.isPrimary) stopSecondaryFloorServices(rt);
+      if (rt.webContents !== wc) {
+        try { ptyManager.killByOwner(rt.webContents); } catch { /* best-effort */ }
+      }
+      floorsByWcId.delete(rt.wcId);
     }
-    floorsByWcId.delete(wcId);
-    if (isFloor) persistOpenFloors();
-    // A closed floor must not leave its terminals running headless. (Natural
-    // onExit teardown — archive + worktree cleanup — still runs per PTY.)
-    if (isFloor) { try { ptyManager.killByOwner(wc); } catch { /* best-effort */ } }
-    if (mainWindow === win) {
-      mainWindow = null;
-      for (const w of allWindows) { if (!w.isDestroyed()) { mainWindow = w; break; } }
-    }
+    try { ptyManager.killByOwner(wc); } catch { /* best-effort */ }
+    mainWindow = null;
+    activeFloorWcId = 0;
     broadcastFloorsChanged();
     syncKeepAwake();
   });
@@ -3065,10 +3036,136 @@ function createWindow(opts: { floor?: boolean; initialHome?: string | null; name
   return win;
 }
 
-/** Open a new floor window — gated by the multiWindow flag. Returns the window,
+/** Add an isolated renderer for a floor inside the one host BrowserWindow. */
+function createFloorView(
+  initialHome: string | null,
+  extra: { name?: string | null; squad?: FloorSquadPreset | null } = {}
+): FloorRuntime | null {
+  const host = mainWindow;
+  if (!host || host.isDestroyed()) return null;
+  const floorNumber = nextFloorNumber([...floorsByWcId.values()].map((rt) => rt.floorNumber));
+  const view = new WebContentsView({
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      backgroundThrottling: false,
+      partition: `persist:floor-${++floorSeq}`
+    }
+  });
+  const wc = view.webContents;
+  const rt = createSecondaryFloorRuntime(host, wc, view, floorNumber, initialHome, extra.squad ?? null);
+  floorsByWcId.set(wc.id, rt);
+  wc.on('focus', () => {
+    if (floorsByWcId.get(wc.id) === rt) {
+      activeFloorWcId = wc.id;
+      syncFloorWindowTitles();
+    }
+  });
+  host.contentView.addChildView(view);
+  resizeFloorViews(host);
+  view.setVisible(false);
+
+  const micFeatureLive = (): boolean => {
+    const cfg = readConfig();
+    return cfg.freeflowEnabled === true || cfg.realtimeVoiceEnabled === true;
+  };
+  wc.session.setPermissionRequestHandler((_requester, permission, callback, details) => {
+    if (permission === 'media') {
+      const mediaTypes = details && 'mediaTypes' in details ? details.mediaTypes : undefined;
+      const wantsAudio = !mediaTypes || mediaTypes.includes('audio');
+      callback(micFeatureLive() && wantsAudio);
+      return;
+    }
+    callback(true);
+  });
+  wc.session.setPermissionCheckHandler((_requester, permission) => permission !== 'media' || micFeatureLive());
+  wc.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  const cleanupAfterContentsGone = (): boolean => cleanupSecondaryFloorAfterContentsGone({
+    isPrimary: rt.isPrimary,
+    isCurrent: () => floorsByWcId.get(wc.id) === rt,
+    detachView: () => {
+      if (rt.view && !rt.win.isDestroyed()) {
+        rt.view.setVisible(false);
+        rt.win.contentView.removeChildView(rt.view);
+      }
+    },
+    killOwnerPtys: () => ptyManager.killByOwner(wc),
+    stopServices: () => stopSecondaryFloorServices(rt),
+    removeRuntime: () => { floorsByWcId.delete(wc.id); },
+    activateFallback: () => {
+      if (activeFloorWcId !== wc.id) return;
+      const fallback = [...floorsByWcId.values()].find((candidate) => candidate.isPrimary)
+        ?? floorsByWcId.values().next().value;
+      if (fallback) activateFloor(fallback);
+    },
+    broadcast: broadcastFloorsChanged
+  });
+  registerSecondaryFloorGoneHandlers(
+    (listener) => wc.once('destroyed', listener),
+    (listener) => wc.once('render-process-gone', listener),
+    cleanupAfterContentsGone
+  );
+
+  if (extra.name && rt.home) setFloorAlias(rt.home, extra.name);
+  if (rt.home) {
+    ensureHarnessHome(rt.home);
+    bootstrapSecondaryFloorServices(rt);
+  }
+  persistOpenFloors();
+  const query = `floor=${floorNumber}`;
+  if (isDev && process.env.ELECTRON_RENDERER_URL) {
+    const url = process.env.ELECTRON_RENDERER_URL;
+    void wc.loadURL(`${url}${url.includes('?') ? '&' : '?'}${query}`);
+  } else {
+    void wc.loadFile(join(__dirname, '../renderer/index.html'), { query: { floor: String(floorNumber) } });
+  }
+  activateFloor(rt);
+  broadcastFloorsChanged();
+  return rt;
+}
+
+function closeFloorView(rt: FloorRuntime): boolean {
+  if (rt.isPrimary || !rt.view || rt.win.isDestroyed() || rt.webContents.isDestroyed()) return false;
+  const owned = ptyManager.countByOwner(rt.webContents);
+  if (owned > 0) {
+    const choice = dialog.showMessageBoxSync(rt.win, {
+      type: 'warning',
+      buttons: ['Close floor', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      message: `Close this floor? ${owned} running terminal${owned === 1 ? '' : 's'} on it will be stopped.`,
+      detail: 'Other floors keep running.'
+    });
+    if (choice === 1) return false;
+  }
+
+  const view = rt.view;
+  view.setVisible(false);
+  rt.win.contentView.removeChildView(view);
+  stopSecondaryFloorServices(rt);
+  try { ptyManager.killByOwner(rt.webContents); } catch { /* best-effort */ }
+  floorsByWcId.delete(rt.wcId);
+  persistOpenFloors();
+  if (activeFloorWcId === rt.wcId) {
+    const fallback = [...floorsByWcId.values()].find((candidate) => candidate.isPrimary)
+      ?? floorsByWcId.values().next().value;
+    if (fallback) activateFloor(fallback);
+  }
+  try { rt.webContents.close(); } catch { /* already closing */ }
+  broadcastFloorsChanged();
+  syncKeepAwake();
+  return true;
+}
+
+/** Open a new floor view — gated by the multiWindow flag. Returns its runtime,
  *  or null when the feature is off (the entry points are hidden in that case,
  *  but the IPC stays defensive). */
-function openFloor(initialHome?: string | null, extra: { name?: string | null; squad?: FloorSquadPreset | null } = {}): BrowserWindow | null {
+function openFloor(initialHome?: string | null, extra: { name?: string | null; squad?: FloorSquadPreset | null } = {}): FloorRuntime | null {
   if (!readConfig().multiWindow) return null;
   if (initialHome) {
     const resolved = resolve(expandTilde(initialHome));
@@ -3076,13 +3173,12 @@ function openFloor(initialHome?: string | null, extra: { name?: string | null; s
     if (existing) {
       const existingRt = floorsByWcId.get(existing.webContentsId);
       if (existingRt && !existingRt.win.isDestroyed()) {
-        if (existingRt.win.isMinimized()) existingRt.win.restore();
-        existingRt.win.focus();
-        return existingRt.win;
+        activateFloor(existingRt);
+        return existingRt;
       }
     }
   }
-  return createWindow({ floor: true, initialHome: initialHome ?? null, name: extra.name ?? null, squad: extra.squad ?? null });
+  return createFloorView(initialHome ?? null, { name: extra.name ?? null, squad: extra.squad ?? null });
 }
 
 /** Reopen the user's secondary workspace floors after the primary window exists. */
@@ -3121,10 +3217,8 @@ function installAppMenu(): void {
     // The menu opens the New Floor FLOW (name + folder + squad) in the focused window; a bare
     // openFloor() here would create a folderless floor that skips the one-folder-per-floor check.
     click: () => {
-      const target = BrowserWindow.getFocusedWindow() ?? mainWindow;
-      if (target && !target.isDestroyed() && !target.webContents.isDestroyed()) {
-        target.webContents.send('floors:new-requested');
-      }
+      const target = floorsByWcId.get(activeFloorWcId)?.webContents ?? mainWindow?.webContents;
+      if (target && !target.isDestroyed()) target.send('floors:new-requested');
     }
   };
   const template: Electron.MenuItemConstructorOptions[] = [
@@ -3240,7 +3334,7 @@ ipcMain.handle('pty:spawn', async (evt, opts: AgentSpawnOptions) => {
   }
   // Record the spawning window as the PTY's owner so its output routes ONLY back
   // to that floor, then run the shared spawn core.
-  const owner = BrowserWindow.fromWebContents(evt.sender)?.webContents ?? null;
+  const owner = evt.sender;
   return spawnAgentCore(opts, owner);
 });
 
@@ -3731,17 +3825,17 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
 }
 ipcMain.handle('pty:write', (evt, id: string, data: string) => {
   if (typeof id !== 'string' || typeof data !== 'string') return { ok: false, error: 'invalid args' };
-  const owner = BrowserWindow.fromWebContents(evt.sender)?.webContents ?? null;
+  const owner = evt.sender;
   return ptyManager.write(id, data, owner);
 });
 ipcMain.handle('pty:resize', (evt, id: string, cols: number, rows: number) => {
   if (typeof id !== 'string' || typeof cols !== 'number' || typeof rows !== 'number') return { ok: false, error: 'invalid args' };
-  const owner = BrowserWindow.fromWebContents(evt.sender)?.webContents ?? null;
+  const owner = evt.sender;
   return ptyManager.resize(id, cols, rows, owner);
 });
 ipcMain.handle('pty:redraw', (evt, id: string) => {
   if (typeof id !== 'string') return { ok: false, error: 'invalid id' };
-  const owner = BrowserWindow.fromWebContents(evt.sender)?.webContents ?? null;
+  const owner = evt.sender;
   return ptyManager.redraw(id, owner);
 });
 ipcMain.handle('pty:kill', (evt, id: string, opts?: { preserveWorktree?: boolean }) => {
@@ -3750,13 +3844,13 @@ ipcMain.handle('pty:kill', (evt, id: string, opts?: { preserveWorktree?: boolean
   // remove its isolated worktree unless restarting in place, drop the maps).
   // teardownPty is idempotent, so node-pty firing onExit once the child actually
   // dies is a harmless no-op.
-  const owner = BrowserWindow.fromWebContents(evt.sender)?.webContents ?? null;
+  const owner = evt.sender;
   const res = ptyManager.kill(id, owner);
   teardownPty(id, opts, owner);
   return res;
 });
 ipcMain.handle('pty:list', (evt) => {
-  const owner = BrowserWindow.fromWebContents(evt.sender)?.webContents ?? null;
+  const owner = evt.sender;
   return ptyManager.list(owner);
 });
 
@@ -3800,7 +3894,7 @@ ipcMain.on('app:readClipboardSync', (evt) => {
 
 // ─── IPC: folder picker ─────────────────────────────────────────────────────
 ipcMain.handle('dialog:chooseFolder', async (evt) => {
-  const win = BrowserWindow.fromWebContents(evt.sender);
+  const win = ownerWindowForContents(evt.sender);
   if (!win) return { ok: false as const, error: 'no window' };
   const res = await dialog.showOpenDialog(win, {
     properties: ['openDirectory', 'createDirectory'],
@@ -3890,7 +3984,7 @@ ipcMain.handle('integrations:test', async (_evt, payload: unknown) => {
 });
 
 // ─── IPC: config ────────────────────────────────────────────────────────────
-// A floor window must see ITS OWN folder as `harnessHome`: the renderer spawns the floor's
+// A floor view must see ITS OWN folder as `harnessHome`: the renderer spawns the floor's
 // orchestrator with `cwd: config.harnessHome`, so handing a secondary floor the primary's
 // folder here would put floor 2's orchestrator in floor 1's directory.
 ipcMain.handle('config:get', (evt): HarnessConfig => {
@@ -3961,14 +4055,11 @@ ipcMain.handle('config:changeHome', async (evt, payload: unknown) => {
   const oldHome = oldRaw ? resolve(oldRaw) : null;
 
   // Enforce single-folder-per-floor lock: if another floor already has newHome open,
-  // focus that floor's window and return a structured result instead of colliding.
+  // activate that floor's view and return a structured result instead of colliding.
   const collision = findFloorByHome(listFloorSummaries(), newHome, callerFloor?.wcId);
   if (collision) {
     const existingRt = floorsByWcId.get(collision.webContentsId);
-    if (existingRt && !existingRt.win.isDestroyed()) {
-      if (existingRt.win.isMinimized()) existingRt.win.restore();
-      existingRt.win.focus();
-    }
+    if (existingRt && !existingRt.win.isDestroyed()) activateFloor(existingRt);
     return {
       ok: false,
       alreadyOpenInFloor: collision.floorNumber,
@@ -3993,7 +4084,7 @@ ipcMain.handle('config:changeHome', async (evt, payload: unknown) => {
   // without restarting the app or disturbing any other open floor.
   if (callerFloor && !callerFloor.isPrimary) {
     stopSecondaryFloorServices(callerFloor);
-    try { ptyManager.killByOwner(callerFloor.win.webContents); } catch { /* best-effort */ }
+    try { ptyManager.killByOwner(callerFloor.webContents); } catch { /* best-effort */ }
     if (mode === 'move' && oldHome) {
       try {
         for (const sub of ['hive', 'palace', 'roster.json', 'roster-backups']) {
@@ -4013,7 +4104,7 @@ ipcMain.handle('config:changeHome', async (evt, payload: unknown) => {
     persistOpenFloors();
     bootstrapSecondaryFloorServices(callerFloor);
     broadcastFloorsChanged();
-    try { callerFloor.win.webContents.reload(); } catch { /* best-effort */ }
+    try { callerFloor.webContents.reload(); } catch { /* best-effort */ }
     return { ok: true as const, reloadedInPlace: true };
   }
 
@@ -4065,13 +4156,13 @@ ipcMain.handle('config:changeHome', async (evt, payload: unknown) => {
     writeConfig({ harnessHome: newHome });
     callerFloor.home = newHome;
     callerFloor.reportedAgents = [];
-    try { ptyManager.killByOwner(callerFloor.win.webContents); } catch { /* best-effort */ }
+    try { ptyManager.killByOwner(callerFloor.webContents); } catch { /* best-effort */ }
     bootstrapHiveServices();
     const cfg = readConfig();
     if (cfg.slackEnabled && cfg.slackSigningSecret) void startSlackServer();
     reconcileWebhookServer();
     broadcastFloorsChanged();
-    try { callerFloor.win.webContents.reload(); } catch { /* best-effort */ }
+    try { callerFloor.webContents.reload(); } catch { /* best-effort */ }
     return { ok: true as const, reloadedInPlace: true };
   }
 
@@ -4336,9 +4427,9 @@ ipcMain.handle('hive:promoteOrchestrator', (evt, newAgentId: unknown, opts: unkn
   const activeHive = fl?.hive ?? hive;
   const res = activeHive.promoteOrchestrator(newAgentId, parsedOpts);
   if (res.ok) {
-    const targetWin = fl?.win ?? BrowserWindow.fromWebContents(evt.sender);
-    if (targetWin && !targetWin.isDestroyed()) {
-      try { targetWin.webContents.send('hive:orchestratorChanged', res); } catch { /* gone */ }
+    const targetContents = fl?.webContents ?? evt.sender;
+    if (!targetContents.isDestroyed()) {
+      try { targetContents.send('hive:orchestratorChanged', res); } catch { /* gone */ }
     }
   }
   return res;
@@ -4529,7 +4620,9 @@ ipcMain.handle('models:refresh', async () => {
     return { status: res.status, body };
   };
   const { file, rows } = await providerModels.refresh(defaultAdapters(cli, () => integrations.getSecret(providerKeyRef('anthropic')), fetchJson));
-  for (const w of BrowserWindow.getAllWindows()) { try { if (!w.isDestroyed()) w.webContents.send('models:catalogChanged', file); } catch { /* gone */ } }
+  for (const rt of floorsByWcId.values()) {
+    try { if (!rt.webContents.isDestroyed()) rt.webContents.send('models:catalogChanged', file); } catch { /* gone */ }
+  }
   return { file, rows };
 });
 
@@ -4618,7 +4711,7 @@ ipcMain.handle('kg:ingestFiles', (_evt, payload: unknown) => {
 });
 // Open a multi-file picker and ingest the chosen artifacts in one round-trip.
 ipcMain.handle('kg:addFiles', async (evt) => {
-  const win = BrowserWindow.fromWebContents(evt.sender);
+  const win = ownerWindowForContents(evt.sender);
   if (!win) return { ok: false as const, error: 'no window' };
   const res = await dialog.showOpenDialog(win, {
     properties: ['openFile', 'multiSelections'],
@@ -4641,7 +4734,7 @@ ipcMain.handle('kg:addFiles', async (evt) => {
 // as a file PATH the agent reads with its Read tool (same convention as Slack).
 // Picker offers an Images group + All Files.
 ipcMain.handle('dialog:attachFiles', async (evt) => {
-  const win = BrowserWindow.fromWebContents(evt.sender);
+  const win = ownerWindowForContents(evt.sender);
   if (!win) return { ok: false as const, error: 'no window' };
   const res = await dialog.showOpenDialog(win, {
     properties: ['openFile', 'multiSelections'],
@@ -4742,13 +4835,13 @@ ipcMain.handle('app:cancelClose', () => {
   abortPendingRestart();
 });
 
-// Open a new floor (independent office window). Gated by the multiWindow flag
-// inside openFloor(); returns whether a window opened so a renderer button can
+// Open a new floor (isolated office view). Gated by the multiWindow flag
+// inside openFloor(); returns whether a view opened so a renderer button can
 // reflect availability. The app-menu "New Floor" item calls openFloor() directly.
 ipcMain.handle('window:newFloor', (_evt, initialHome?: unknown) => {
   const home = typeof initialHome === 'string' && initialHome.trim() ? initialHome.trim() : null;
-  const win = openFloor(home);
-  return { ok: win != null };
+  const rt = openFloor(home);
+  return { ok: rt != null };
 });
 
 // ─── IPC: multiple floors (Building Tower & Discord-style Floor Rail) ───────
@@ -4811,7 +4904,7 @@ ipcMain.handle('floors:inspectFolder', async (_evt, rawPath: unknown) => {
 });
 
 ipcMain.handle('floors:browseFolder', async (evt) => {
-  const owner = BrowserWindow.fromWebContents(evt.sender);
+  const owner = floorForWebContents(evt.sender)?.win ?? mainWindow;
   const dialogOpts: Electron.OpenDialogOptions = {
     title: 'Choose a folder for the new floor',
     properties: ['openDirectory', 'createDirectory']
@@ -4837,16 +4930,14 @@ ipcMain.handle('floors:open', (_evt, arg?: unknown) => {
     if (existing) {
       const existingRt = floorsByWcId.get(existing.webContentsId);
       if (existingRt && !existingRt.win.isDestroyed()) {
-        if (existingRt.win.isMinimized()) existingRt.win.restore();
-        existingRt.win.focus();
+        activateFloor(existingRt);
         return { ok: true, floorNumber: existing.floorNumber, focusedExisting: true };
       }
     }
   }
-  const win = openFloor(home, { name, squad });
-  if (!win) return { ok: false, error: 'Multi-window floors are disabled.' };
-  const rt = floorsByWcId.get(win.webContents.id);
-  return { ok: true, floorNumber: rt?.floorNumber ?? 1, focusedExisting: false };
+  const rt = openFloor(home, { name, squad });
+  if (!rt) return { ok: false, error: 'Floor views are disabled.' };
+  return { ok: true, floorNumber: rt.floorNumber, focusedExisting: false };
 });
 
 // Rename a floor (any floor, from any window). Blank clears the alias back to the folder name.
@@ -4876,9 +4967,9 @@ ipcMain.handle('floors:takeSquad', (evt) => {
 ipcMain.handle('floors:resetAgents', (_evt, floorNumber: unknown) => {
   if (typeof floorNumber !== 'number') return { ok: false, error: 'invalid floorNumber' };
   const rt = [...floorsByWcId.values()].find((r) => r.floorNumber === floorNumber && !r.win.isDestroyed());
-  if (!rt || rt.win.webContents.isDestroyed()) return { ok: false, error: 'floor not found' };
+  if (!rt || rt.webContents.isDestroyed()) return { ok: false, error: 'floor not found' };
   try {
-    rt.win.webContents.send('floors:reset-agents');
+    rt.webContents.send('floors:reset-agents');
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
@@ -4889,8 +4980,7 @@ ipcMain.handle('floors:focus', (_evt, floorNumber: unknown) => {
   if (typeof floorNumber !== 'number') return { ok: false, error: 'invalid floorNumber' };
   for (const rt of floorsByWcId.values()) {
     if (rt.floorNumber === floorNumber && !rt.win.isDestroyed()) {
-      if (rt.win.isMinimized()) rt.win.restore();
-      rt.win.focus();
+      activateFloor(rt);
       return { ok: true };
     }
   }
@@ -4901,8 +4991,7 @@ ipcMain.handle('floors:close', (_evt, floorNumber: unknown) => {
   if (typeof floorNumber !== 'number') return { ok: false, error: 'invalid floorNumber' };
   for (const rt of floorsByWcId.values()) {
     if (rt.floorNumber === floorNumber && !rt.win.isDestroyed()) {
-      rt.win.close();
-      return { ok: true };
+      return closeFloorView(rt) ? { ok: true } : { ok: false, error: 'Floor could not be closed.' };
     }
   }
   return { ok: false, error: 'floor not found' };
@@ -4929,7 +5018,7 @@ ipcMain.handle('floors:reportAgents', (evt, rawAgents: unknown) => {
 
 ipcMain.handle('floors:stopAll', (evt) => {
   const fl = floorForWebContents(evt.sender);
-  const owner = BrowserWindow.fromWebContents(evt.sender)?.webContents ?? null;
+  const owner = evt.sender;
   if (!owner) return { ok: false, stopped: 0 };
   const owned = ptyManager.list(owner);
   let stopped = 0;
@@ -5631,7 +5720,7 @@ registerRealtimeActionIpc({
   controlSnapshot: (id) => control.snapshot(id),
   killAgent: (id) => {
     const fl = floorForPtyId(id) ?? floorForAgentId(id);
-    const ownerWc = fl?.win?.webContents ?? null;
+    const ownerWc = fl?.webContents ?? null;
     const r = ptyManager.kill(id, ownerWc);
     teardownPty(id, undefined, ownerWc);
     // A voice (MAIN-initiated) kill: the renderer never removed the card itself
@@ -6603,16 +6692,15 @@ app.on('before-quit', (e) => {
   e.preventDefault();
   if (mainWindow) {
     mainWindow.focus();
-    mainWindow.webContents.send('app:closeRequested', { ptyCount: count });
+    (liveWebContents() ?? mainWindow.webContents).send('app:closeRequested', { ptyCount: count });
   }
 });
 
-// Every window loads the config once at start-up, so tell them all when a
-// setting is saved — a floor left out would keep showing what it opened with.
+// Every floor renderer loads config at start-up; keep embedded views in sync too.
 onConfigWritten((config) => {
-  for (const w of allWindows) {
-    if (w.isDestroyed() || w.webContents.isDestroyed()) continue;
-    w.webContents.send('config:changed', config);
+  for (const rt of floorsByWcId.values()) {
+    if (rt.win.isDestroyed() || rt.webContents.isDestroyed()) continue;
+    rt.webContents.send('config:changed', config);
   }
 });
 

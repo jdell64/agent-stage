@@ -1029,9 +1029,9 @@ const api = {
     return () => ipcRenderer.removeListener('power:resume', listener);
   },
 
-  // ─── Multi-window floors ───────────────────────────────────────────────────
-  /** Open a new floor (independent office window). No-op when the multiWindow
-   *  flag is off. Resolves { ok } indicating whether a window opened. */
+  // ─── Multi-floor views ─────────────────────────────────────────────────────
+  /** Open a new floor (isolated office view). No-op when the multiWindow
+   *  flag is off. Resolves { ok } indicating whether a view opened. */
   newFloor: (initialHome?: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('window:newFloor', initialHome),
 
   floors: {

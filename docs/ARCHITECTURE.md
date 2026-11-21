@@ -78,6 +78,11 @@ HIVE.md · SPEC.md · DESIGN.md   multi-agent · terminal/event · visual design
 docs/message-queue.md        who may type into an agent's terminal, and when
 ```
 
+The Building Tower uses one host `BrowserWindow`. Floor 1 renders in its main
+webContents; each additional floor is an isolated `WebContentsView` with its own
+persistent session, Hive runtime, and PTY ownership. Switching floors shows one
+floor view at a time while the floor processes remain independent.
+
 The Building Tower's floor order is stored in the SQLite `kv` table by normalized
 workspace path, so drag ordering survives window close/reopen and floor numbers
 being reassigned. A newly opened workspace is appended after the saved floors.
