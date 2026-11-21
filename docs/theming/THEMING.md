@@ -59,6 +59,10 @@ my-office/
   "tilesets": [
     { "file": "tilesets/main.png", "embedded": true }   // see "Tilesets"
   ],
+  "floorLayouts": [
+    { "id": "bridge", "name": "Bridge", "map": "layouts/bridge.tmj", "idleZones": [{"x":4,"y":6}] },
+    { "id": "lounge", "name": "Lounge", "map": "layouts/lounge.tmj", "idleZones": [{"x":7,"y":5}] }
+  ],
   "seats": {
     "primary": ["desk-ceo", "pc-1", "pc-2"],            // [0] MUST be desk-ceo
     "cafe": ["cafe-seat-1"],
@@ -85,6 +89,22 @@ my-office/
 Required: `schema`, `id`, `name`, `version`, `author`, `license`, `map`, `tilesets`, `seats`,
 `anchors`, `monitor`, `palette`. Everything else is optional. Bad optional fields (fonts,
 tokens, copy, cast, quips) are reported as warnings and dropped, never fatal.
+
+### Named floor layouts
+
+`floorLayouts` optionally declares the ordered rooms that floors of the same theme use. Each
+layout requires a unique lowercase `id`, display `name`, and safe relative `.tmj` map path. It may
+override `tilesets`, `seats`, `coffee`, `anchors`, `cameraBounds`, `errandSpots`, `idleZones`, and
+`monitor`; omitted fields inherit the pack-level values. Layout maps use the same shared cast,
+palette, quips, fonts, and chrome as the pack. Put alternate maps under `layouts/` and reference
+them from the manifest.
+
+New floors take the first unassigned layout in manifest order. A layout may set `catchAll: true`;
+it is kept for overflow after the other layouts have been assigned. Only one explicit catch-all is
+allowed. Without one, the final layout is assigned once in order and is reused for later floors.
+Packs without `floorLayouts` continue to use the top-level map as a single `default` layout.
+The app saves a floor's layout alongside its theme so it reopens in the same room; if a saved room
+was removed from the pack, that floor falls back to the theme's default room.
 
 ### Speech-bubble quips
 

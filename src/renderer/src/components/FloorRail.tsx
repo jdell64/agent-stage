@@ -131,8 +131,8 @@ export function FloorRail({
               <button
                 type="button"
                 onClick={() => onSelectFloor(fl.floorNumber)}
-                title={`Floor ${fl.floorNumber}: ${fl.displayName ?? fl.folderName} (${fl.displayPath}) — ${fl.workingCount} working, ${fl.agentCount} total`}
-                aria-label={`Floor ${fl.floorNumber}: ${fl.folderName}`}
+                title={`Floor ${fl.floorNumber}${fl.layoutName ? ` · ${fl.layoutName}` : ''}: ${fl.displayName ?? fl.folderName} (${fl.displayPath}) — ${fl.workingCount} working, ${fl.agentCount} total`}
+                aria-label={`Floor ${fl.floorNumber}${fl.layoutName ? `, ${fl.layoutName}` : ''}: ${fl.folderName}`}
                 aria-current={isCurrent ? 'page' : undefined}
                 style={{
                   position: 'relative',

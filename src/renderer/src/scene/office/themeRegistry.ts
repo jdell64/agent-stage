@@ -122,6 +122,10 @@ export interface ThemeChrome {
 /** The full contract a theme must supply. See report §A (theme contract). */
 export interface ThemeConfig {
   id: ThemeId;
+  /** Resolved floor layout, or `default` for legacy single-layout packs. */
+  layoutId: string;
+  layoutName: string;
+  layoutCatchAll: boolean;
   /** Raw Tiled JSON text; parsed + tileset-patched by themeLoader. */
   mapRaw: string;
   /** Ordered atlases — order matches both the texture load order and the map's

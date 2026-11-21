@@ -103,6 +103,24 @@ export interface PackManifestTileset {
   image?: string;
 }
 
+/** A named room a theme can assign to one of its application floors. The
+ *  pack-level properties are defaults; a layout overrides the map-bound parts
+ *  that differ for that room. */
+export interface PackFloorLayout {
+  id: string;
+  name: string;
+  map: string;
+  catchAll?: boolean;
+  tilesets?: PackManifestTileset[];
+  seats?: PackManifest['seats'];
+  coffee?: CoffeeConfig;
+  anchors?: AnchorConfig;
+  cameraBounds?: CameraBounds;
+  errandSpots?: ErrandSpot[];
+  idleZones?: Tile[];
+  monitor?: MonitorConfig;
+}
+
 /** == theme.json, 1:1 (§2.7). */
 export interface PackManifest {
   schema: 1;
@@ -134,6 +152,9 @@ export interface PackManifest {
   terminal?: string;
   copy?: { appName?: string; orchestratorName?: string };
   cast?: { roster: string; default: string };
+  /** Ordered named environments. When absent, the pack's top-level map is its
+   *  single catch-all layout. */
+  floorLayouts?: PackFloorLayout[];
 }
 
 /** What main returns over IPC: manifest + the already size-checked bytes. */
@@ -154,6 +175,8 @@ export interface PackSummary {
   /** False when the pack has an error issue (picker shows it greyed out). */
   available: boolean;
   issues: Issue[];
+  /** Validated layout ids/names for deterministic floor assignment. */
+  floorLayouts?: Array<Pick<PackFloorLayout, 'id' | 'name' | 'catchAll'>>;
 }
 
 /** Atlas metadata the loader derives from the PNG header (never trusted from the manifest). */
@@ -181,6 +204,17 @@ export interface ValidatedPack {
   tilesets: ResolvedTileset[];
   /** `copy` / fonts / tokens that passed validation (carried, applied elsewhere). */
   tokensCss?: string;
+  /** Fully merged and independently validated layouts in manifest order. */
+  floorLayouts: ValidatedFloorLayout[];
+}
+
+export interface ValidatedFloorLayout {
+  id: string;
+  name: string;
+  catchAll: boolean;
+  manifest: PackManifest;
+  mapRaw: string;
+  tilesets: ResolvedTileset[];
 }
 
 export interface ValidateInput {
@@ -359,6 +393,8 @@ export function validatePack(input: ValidateInput): ValidateResult {
   // Stop here when the manifest skeleton is unusable: later checks index into it.
   if (issues.some((i) => i.level === 'error')) return fail();
 
+  const rawFloorLayouts = m.floorLayouts;
+  delete m.floorLayouts;
   const manifest = m as unknown as PackManifest;
 
   // ── map ──
@@ -659,7 +695,111 @@ export function validatePack(input: ValidateInput): ValidateResult {
   }
   if (tsFiles.length > 0 && !manifest.license) warn('no-license', 'license', 'pack uses tilesets but declares no license');
 
-  return { pack: { manifest: out, mapRaw, tilesets: tsFiles, tokensCss }, issues };
+  const validatedLayouts: ValidatedFloorLayout[] = [];
+  if (rawFloorLayouts !== undefined) {
+    if (!Array.isArray(rawFloorLayouts) || rawFloorLayouts.length === 0 || rawFloorLayouts.length > 16) {
+      err('bad-floor-layouts', 'floorLayouts', 'floorLayouts must be an array with 1..16 layouts');
+    } else {
+      const seenLayoutIds = new Set<string>();
+      const catchAllIndexes: number[] = [];
+      rawFloorLayouts.forEach((value, index) => {
+        const path = `floorLayouts[${index}]`;
+        if (!isObj(value)) {
+          err('bad-floor-layout', path, 'layout must be an object');
+          return;
+        }
+        const layout = value as Record<string, unknown>;
+        if (!isStr(layout.id) || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(layout.id)) {
+          err('bad-floor-layout-id', `${path}.id`, 'id must be 1..40 lowercase letters, digits, or hyphens and start with a letter or digit');
+          return;
+        }
+        if (layout.catchAll !== undefined && typeof layout.catchAll !== 'boolean') {
+          err('bad-floor-layout-catch-all', `${path}.catchAll`, 'catchAll must be a boolean');
+          return;
+        }
+        if (layout.catchAll === true) catchAllIndexes.push(index);
+        if (seenLayoutIds.has(layout.id)) {
+          err('duplicate-floor-layout-id', `${path}.id`, `layout id '${layout.id}' is repeated`);
+          return;
+        }
+        seenLayoutIds.add(layout.id);
+        if (!isStr(layout.name) || layout.name.trim().length === 0 || layout.name.length > 60) {
+          err('bad-floor-layout-name', `${path}.name`, 'name must be 1..60 characters');
+          return;
+        }
+        if (!isSafeRelPath(layout.map) || !layout.map.toLowerCase().endsWith('.tmj')) {
+          err('bad-floor-layout-map', `${path}.map`, 'map must be a safe relative .tmj file path');
+          return;
+        }
+        const mapBytesForLayout = files[layout.map];
+        if (!mapBytesForLayout) {
+          err('missing-floor-layout-map', `${path}.map`, `map file '${layout.map}' is missing`);
+          return;
+        }
+        if (mapBytesForLayout.byteLength > PACK_LIMITS.mapBytes) {
+          err('floor-layout-map-too-large', `${path}.map`, `map file '${layout.map}' exceeds ${PACK_LIMITS.mapBytes} bytes`);
+          return;
+        }
+
+        const allowed = new Set(['id', 'name', 'map', 'catchAll', 'tilesets', 'seats', 'coffee', 'anchors', 'cameraBounds', 'errandSpots', 'idleZones', 'monitor']);
+        for (const key of Object.keys(layout)) {
+          if (!allowed.has(key)) warn('unknown-floor-layout-field', `${path}.${key}`, 'unknown layout field ignored');
+        }
+        const overrideFields = Object.fromEntries(
+          ['tilesets', 'seats', 'coffee', 'anchors', 'cameraBounds', 'errandSpots', 'idleZones', 'monitor']
+            .filter((key) => Object.prototype.hasOwnProperty.call(layout, key))
+            .map((key) => [key, layout[key]])
+        );
+        const effective = { ...manifest, ...overrideFields, map: 'map.tmj' } as Record<string, unknown>;
+        delete effective.floorLayouts;
+        delete effective.catchAll;
+        const bytes = new TextEncoder().encode(JSON.stringify(effective));
+        const nestedFiles = { ...files, 'theme.json': bytes, 'map.tmj': mapBytesForLayout };
+        const nested = validatePack({ dirName, files: nestedFiles });
+        for (const nestedIssue of nested.issues) {
+          issues.push({
+            ...nestedIssue,
+            path: nestedIssue.path === 'map.tmj'
+              ? `${path}.map (${layout.map})`
+              : `${path}.${nestedIssue.path}`.replace(/\.$/, ''),
+          });
+        }
+        if (!nested.pack) return;
+        const layoutManifest = { ...nested.pack.manifest, map: layout.map };
+        delete layoutManifest.floorLayouts;
+        validatedLayouts.push({
+          id: layout.id,
+          name: layout.name.trim(),
+          catchAll: layout.catchAll === true,
+          manifest: layoutManifest,
+          mapRaw: nested.pack.mapRaw,
+          tilesets: nested.pack.tilesets,
+        });
+      });
+      if (catchAllIndexes.length > 1) err('multiple-catch-all-layouts', 'floorLayouts', 'only one layout may set catchAll:true');
+      if (catchAllIndexes.length === 0 && rawFloorLayouts.length > 0) {
+        const lastId = (rawFloorLayouts[rawFloorLayouts.length - 1] as Record<string, unknown> | null)?.id;
+        const last = validatedLayouts.find((layout) => layout.id === lastId);
+        if (last) last.catchAll = true;
+      }
+      out.floorLayouts = validatedLayouts.map(({ id, name, catchAll, manifest: layoutManifest }) => ({
+        id, name, catchAll, map: layoutManifest.map,
+        tilesets: layoutManifest.tilesets,
+        seats: layoutManifest.seats,
+        coffee: layoutManifest.coffee,
+        anchors: layoutManifest.anchors,
+        cameraBounds: layoutManifest.cameraBounds,
+        errandSpots: layoutManifest.errandSpots,
+        idleZones: layoutManifest.idleZones,
+        monitor: layoutManifest.monitor,
+      }));
+    }
+  } else {
+    out.floorLayouts = [];
+  }
+
+  if (issues.some((issue) => issue.level === 'error')) return fail();
+  return { pack: { manifest: out, mapRaw, tilesets: tsFiles, tokensCss, floorLayouts: validatedLayouts }, issues };
 }
 
 /** Convenience for callers that only need to know if a pack is usable. */
