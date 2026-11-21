@@ -26,6 +26,7 @@ for (const name of ['claudeCommands', 'codexCommands', 'grokCommands', 'agentPro
   fs.writeFileSync(path.join(out, `${name}.js`), js, 'utf8');
 }
 const ap = require(path.join(out, 'agentProvider.js'));
+const codex = require(path.join(out, 'codexCommands.js'));
 
 let failures = 0;
 function test(name, fn) {
@@ -91,6 +92,11 @@ test('cursor preset is interactive (no -p), uses force+trust auto flags, types s
 test('codex preset still resolves (no regression)', () => {
   assert.strictEqual(ap.inferAgentProvider('codex'), 'codex');
   assert.strictEqual(ap.providerPreset('codex').defaultCommand, 'codex');
+});
+
+test('switching away from Codex strips the opt-in full-access flag', () => {
+  assert.strictEqual(codex.setCodexFullAccess('codex --model gpt-5-codex -s danger-full-access', false), 'codex --model gpt-5-codex');
+  assert.strictEqual(codex.setCodexFullAccess('codex --model gpt-5-codex -s danger-full-access', true), 'codex --model gpt-5-codex -s danger-full-access');
 });
 
 if (failures > 0) {

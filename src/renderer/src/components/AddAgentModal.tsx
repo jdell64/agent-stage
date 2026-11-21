@@ -33,6 +33,7 @@ import {
   isClaudeProvider
 } from '@/store/config';
 import { useRtl } from '@/i18n/useDirection';
+import { setCodexFullAccess } from '@shared/codexCommands';
 
 const ACCENTS: AccentColorName[] = ['coral', 'mint', 'sky', 'lemon', 'lilac', 'peach'];
 
@@ -221,19 +222,19 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
       setFolderNote(undefined);
     }
     if (id === 'custom') {
-      setCommand(command.trim() || config.defaultCommand || '');
+      setCommand(setCodexFullAccess(command.trim() || config.defaultCommand || '', false));
       return;
     }
-    setCommand(buildSpawnCommand(config, nextModel, id));
+    setCommand(setCodexFullAccess(buildSpawnCommand(config, nextModel, id), id === 'codex' && codexFullAccess));
   };
   const preset = providerPreset(provider);
   const codexFullAccess = provider === 'codex' && /(?:^|\s)-s\s+danger-full-access(?:\s|$)/.test(command);
   const toggleCodexFullAccess = () => {
     if (provider !== 'codex') return;
     if (codexFullAccess) {
-      setCommand(command.replace(/(?:\s|^)-s\s+danger-full-access(?=\s|$)/, '').replace(/\s{2,}/g, ' ').trim());
+      setCommand(setCodexFullAccess(command, false));
     } else {
-      setCommand(`${command.trim()} -s danger-full-access`.trim());
+      setCommand(setCodexFullAccess(command, true));
     }
   };
   const [goal, setGoal] = useState(pendingHire?.goal ?? '');
