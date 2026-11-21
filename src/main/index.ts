@@ -6647,6 +6647,11 @@ function onSystemResume(reason: string): void {
 }
 
 app.whenReady().then(() => {
+  // Electron may still deliver `whenReady` to a second process after the
+  // single-instance lock was denied. Do not bootstrap the hive in that process:
+  // startup migration would otherwise archive agents belonging to the already
+  // running instance before app.quit() finishes.
+  if (!gotInstanceLock) return;
   if (process.platform === 'darwin' && !app.isPackaged) {
     app.dock?.setIcon(join(app.getAppPath(), 'build/agent-stage.png'));
   }
