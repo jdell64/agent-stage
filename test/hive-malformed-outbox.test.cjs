@@ -151,19 +151,47 @@ test('outboxes without a registry entry are ignored and logged once', async (t) 
   assert.equal(hive.inbox('orchestrator-1').length, 0);
 });
 
-test('delivered messages are quarantined when the .sent archive cannot be created', async (t) => {
+test('archived but registered agents can still route their outbox', async (t) => {
+  const { hive, outbox } = await floor(t);
+  const registryPath = path.join(hive.root(), 'registry.json');
+  const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+  registry.agents['worker-1'].archived = true;
+  fs.writeFileSync(registryPath, JSON.stringify(registry), 'utf8');
+  writeOutbox(outbox, 'archived-agent.json', JSON.stringify({ to: 'orchestrator', act: 'inform', body: 'still registered' }));
+
+  assert.equal(hive.routeOnce(), 1);
+  assert.equal(hive.inbox('orchestrator-1')[0].body, 'still registered');
+});
+
+test('an agent registered immediately before its first outbox write routes normally', async (t) => {
+  const { hive } = await floor(t);
+  await hive.ensureAgent({ id: 'new-agent', name: 'New agent', provider: 'claude', cwd: hive.root() });
+  const outbox = path.join(hive.root(), 'agents', 'new-agent', 'outbox');
+  writeOutbox(outbox, 'first-message.json', JSON.stringify({ to: 'orchestrator', act: 'inform', body: 'first write' }));
+
+  assert.equal(hive.routeOnce(), 1);
+  assert.equal(hive.inbox('orchestrator-1')[0].body, 'first write');
+});
+
+test('delivered messages are copied to durable quarantine before unlink if both archives fail', async (t) => {
   const { hive, outbox } = await floor(t);
   fs.rmSync(path.join(outbox, '.sent'), { recursive: true, force: true });
   fs.writeFileSync(path.join(outbox, '.sent'), 'block archive directory creation');
-  writeOutbox(outbox, 'delivered.json', JSON.stringify({ to: 'orchestrator', act: 'inform', body: 'delivered once' }));
+  const agents = path.join(hive.root(), 'agents');
+  fs.writeFileSync(path.join(agents, '.outbox-quarantine'), 'block secondary quarantine');
+  const original = JSON.stringify({ to: 'orchestrator', act: 'inform', body: 'delivered once' });
+  writeOutbox(outbox, 'delivered.json', original);
 
   assert.equal(hive.routeOnce(), 1);
   assert.equal(hive.inbox('orchestrator-1')[0].body, 'delivered once');
-  const quarantine = path.join(hive.root(), 'agents', '.outbox-quarantine', 'worker-1');
-  assert.equal(fs.readdirSync(quarantine).some((name) => name.startsWith('delivered.json.')), true);
+  const quarantine = path.join(hive.root(), 'outbox-quarantine', 'worker-1');
+  const quarantinedFile = fs.readdirSync(quarantine).find((name) => name.startsWith('delivered.json.'));
+  assert.ok(quarantinedFile);
+  assert.equal(fs.readFileSync(path.join(quarantine, quarantinedFile), 'utf8'), original);
   assert.equal(fs.existsSync(path.join(outbox, 'delivered.json')), false);
   assert.equal(hive.routeOnce(), 0);
   assert.equal(hive.inbox('orchestrator-1').filter((message) => message.body === 'delivered once').length, 1);
-  assert.equal(hive.logTail(100).filter((entry) => entry.kind === 'outbox-quarantined' && entry.file === 'delivered.json').length, 1);
-  assert.equal(hive.logTail(100).some((entry) => entry.reason === 'unregistered-outbox' && entry.from === '.outbox-quarantine'), false);
+  const quarantineEvent = hive.logTail(100).find((entry) => entry.kind === 'outbox-quarantined' && entry.file === 'delivered.json');
+  assert.ok(quarantineEvent);
+  assert.ok(quarantineEvent.id, 'durable quarantine log identifies the dropped message');
 });

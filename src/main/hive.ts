@@ -452,6 +452,13 @@ export class HiveManager {
 
   private routerTimer: NodeJS.Timeout | null = null;
   private unregisteredOutboxesLogged = new Set<string>();
+  private unarchivedOutboxFiles = new Set<string>();
+
+  private rememberOutboxKey(set: Set<string>, key: string): void {
+    set.delete(key);
+    set.add(key);
+    while (set.size > 100) set.delete(set.values().next().value!);
+  }
 
   /** The embedded OTLP collector's loopback URL, set by the main process once the
    *  collector is bound (telemetry.ts). null = telemetry off → no OTel env is
@@ -2299,7 +2306,7 @@ export class HiveManager {
       if (!existsSync(outbox)) continue;
       if (!registeredAgents.has(id)) {
         if (!this.unregisteredOutboxesLogged.has(id)) {
-          this.unregisteredOutboxesLogged.add(id);
+          this.rememberOutboxKey(this.unregisteredOutboxesLogged, id);
           this.appendLog({ kind: 'drop', reason: 'unregistered-outbox', from: id });
         }
         continue;
@@ -2307,6 +2314,10 @@ export class HiveManager {
       for (const f of readdirSync(outbox)) {
         if (!f.endsWith('.json')) continue;
         const full = join(outbox, f);
+        const outboxKey = `${id}/${f}`;
+        if (this.unarchivedOutboxFiles.has(outboxKey)) continue;
+        let messageId: string | undefined;
+        let messageBody: string | undefined;
         const archive = (archiveName: string) => {
           const sent = join(outbox, '.sent');
           try {
@@ -2324,10 +2335,28 @@ export class HiveManager {
             return;
           } catch { /* last resort below */ }
 
+          // Preserve the exact original bytes outside every scanned outbox
+          // before removing the source, so even an exceptional drop is recoverable.
+          const durableQuarantine = join(root, 'outbox-quarantine', id);
+          const durableName = `${archiveName}.${Date.now()}.${randomBytes(4).toString('hex')}`;
           try {
+            mkdirSync(durableQuarantine, { recursive: true });
+            copyFileSync(full, join(durableQuarantine, durableName));
             unlinkSync(full);
-            this.appendLog({ kind: 'drop', reason: 'outbox-archive-failed', from: id, file: f });
-          } catch { /* the source may already have disappeared */ }
+            this.appendLog({ kind: 'outbox-quarantined', from: id, file: f, id: messageId, quarantine: `outbox-quarantine/${id}/${durableName}` });
+            return;
+          } catch { /* retain the source unless a durable log copy succeeds */ }
+
+          try {
+            // Last resort when the quarantine filesystem path itself is unusable:
+            // persist the message identity/body before unlinking to prevent replay.
+            this.appendLog({ kind: 'drop', reason: 'outbox-archive-failed', from: id, file: f, id: messageId, body: messageBody });
+            unlinkSync(full);
+          } catch {
+            // Nothing could be persisted or moved. Avoid repeat delivery this
+            // process; the original source remains available for operator recovery.
+            this.rememberOutboxKey(this.unarchivedOutboxFiles, outboxKey);
+          }
         };
         try {
           const raw = readFileSync(full, 'utf8');
@@ -2361,6 +2390,8 @@ export class HiveManager {
           }
           const msg = this.normalize(partial, id);
           msg.from = id; // sender is authoritative — the owning directory
+          messageId = msg.id;
+          messageBody = msg.body;
           this.routeMessage(msg);
           archive(f);
           routed++;
