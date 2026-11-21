@@ -115,6 +115,7 @@ import {
   nextFloorNumber,
   normalizeHivePath,
   orderFloorSummaries,
+  restorableFloorHomes,
   sanitizeFloorName,
   shortenHomePath,
   takePendingFloorSquad,
@@ -439,6 +440,7 @@ interface FloorRuntime {
 }
 
 const floorsByWcId = new Map<number, FloorRuntime>();
+let restoringFloors = false;
 
 function createSecondaryFloorRuntime(
   win: BrowserWindow,
@@ -681,6 +683,16 @@ function listFloorSummaries(): FloorSummary[] {
   return orderFloorSummaries(floors, Array.isArray(savedOrder)
     ? savedOrder.filter((key): key is string => typeof key === 'string')
     : []);
+}
+
+/** Save the secondary floors that should be reopened the next time the app starts. */
+function persistOpenFloors(): void {
+  if (restoringFloors || allowQuit) return;
+  try {
+    persist.setKv('floors.open', listFloorSummaries()
+      .filter((floor): floor is FloorSummary & { home: string } => floor.floorNumber !== 1 && !!floor.home)
+      .map((floor) => floor.home));
+  } catch { /* best-effort; the live floors remain available */ }
 }
 
 function syncFloorWindowTitles(): void {
@@ -2902,6 +2914,7 @@ function createWindow(opts: { floor?: boolean; initialHome?: string | null; name
   }
 
   allWindows.add(win);
+  if (isFloor) persistOpenFloors();
   broadcastFloorsChanged();
   // Global timer events follow the user — the most-recently-focused window is
   // primary. The primary is also seeded synchronously so boot events route now.
@@ -3037,6 +3050,7 @@ function createWindow(opts: { floor?: boolean; initialHome?: string | null; name
       stopSecondaryFloorServices(rt);
     }
     floorsByWcId.delete(wcId);
+    if (isFloor) persistOpenFloors();
     // A closed floor must not leave its terminals running headless. (Natural
     // onExit teardown — archive + worktree cleanup — still runs per PTY.)
     if (isFloor) { try { ptyManager.killByOwner(wc); } catch { /* best-effort */ } }
@@ -3069,6 +3083,30 @@ function openFloor(initialHome?: string | null, extra: { name?: string | null; s
     }
   }
   return createWindow({ floor: true, initialHome: initialHome ?? null, name: extra.name ?? null, squad: extra.squad ?? null });
+}
+
+/** Reopen the user's secondary workspace floors after the primary window exists. */
+function restoreOpenFloors(): void {
+  if (!readConfig().multiWindow) return;
+  const primaryHome = process.env.MD_HIVE_ROOT || readConfig().harnessHome;
+  const saved = persist.getKv<unknown>('floors.open');
+  const homes = restorableFloorHomes(saved, primaryHome);
+  restoringFloors = true;
+  try {
+    for (const home of homes) {
+      try {
+        const resolved = resolve(expandTilde(home));
+        if (!existsSync(resolved) || !statSync(resolved).isDirectory()) continue;
+        // A restored floor resumes its existing workspace; it must not hire a fresh squad.
+        openFloor(resolved, { name: floorAliasFor(resolved), squad: 'empty' });
+      } catch (error) {
+        console.warn(`[floors] Could not restore ${home}:`, error);
+      }
+    }
+  } finally {
+    restoringFloors = false;
+    persistOpenFloors();
+  }
 }
 
 /** Build + install the application menu. Only called when multiWindow is on, so
@@ -3972,6 +4010,7 @@ ipcMain.handle('config:changeHome', async (evt, payload: unknown) => {
     callerFloor.reportedAgents = [];
     const { recentHives } = normalizeHiveHome(newHome, readConfig().recentHives ?? []);
     writeConfig({ recentHives });
+    persistOpenFloors();
     bootstrapSecondaryFloorServices(callerFloor);
     broadcastFloorsChanged();
     try { callerFloor.win.webContents.reload(); } catch { /* best-effort */ }
@@ -6530,6 +6569,7 @@ app.whenReady().then(() => {
   // off, the app keeps Electron's default menu — zero behavior change.
   if (readConfig().multiWindow) installAppMenu();
   createWindow();
+  restoreOpenFloors();
   // Auto-start the Slack webhook server when configured. Best-effort: a tunnel
   // failure (offline) is logged, not fatal. The tunnel URL is ephemeral and
   // changes per restart, so the user re-pastes it via Settings → Start.

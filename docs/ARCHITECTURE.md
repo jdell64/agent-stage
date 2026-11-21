@@ -81,6 +81,9 @@ docs/message-queue.md        who may type into an agent's terminal, and when
 The Building Tower's floor order is stored in the SQLite `kv` table by normalized
 workspace path, so drag ordering survives window close/reopen and floor numbers
 being reassigned. A newly opened workspace is appended after the saved floors.
+Open secondary floor workspace paths are persisted in the SQLite `kv` store.
+At the next app launch, existing folders reopen in their saved order without
+creating a second starting squad; closing a floor removes it from that list.
 
 <div align="right">(<a href="#munder-difflin">↑ back to top</a>)</div>
 
