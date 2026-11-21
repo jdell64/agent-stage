@@ -127,6 +127,22 @@ export function squadDefinition(preset: FloorSquadPreset | null | undefined): Fl
   return FLOOR_SQUADS.find((s) => s.id === preset) ?? FLOOR_SQUADS[2];
 }
 
+/** Use a selected theme's cast order for the New Floor preview, keeping the
+ * orchestrator in the first slot. Any missing entries retain their preset art. */
+export function squadPreviewForCast(
+  preset: FloorSquadPreset | null | undefined,
+  castCharacters: readonly string[],
+  orchestratorCharacter?: string
+): FloorSquadMember[] {
+  const orderedCast = orchestratorCharacter && castCharacters.includes(orchestratorCharacter)
+    ? [orchestratorCharacter, ...castCharacters.filter((character) => character !== orchestratorCharacter)]
+    : castCharacters;
+  return squadDefinition(preset).members.map((member, index) => ({
+    ...member,
+    character: orderedCast[index] ?? member.character
+  }));
+}
+
 /** The worker agents a preset hires on top of the orchestrator. */
 export function squadWorkers(preset: FloorSquadPreset | null | undefined): FloorSquadMember[] {
   return squadDefinition(preset).members.filter((m) => !m.orchestrator);

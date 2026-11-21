@@ -3,6 +3,7 @@ import {
   normalizeHivePath,
   floorThemeForHome,
   rememberFloorTheme,
+  squadPreviewForCast,
   findFloorByHome,
   nextFloorNumber,
   deriveFloorShortTag,
@@ -13,6 +14,24 @@ import {
 } from '../../src/shared/floors';
 
 describe('src/shared/floors', () => {
+  describe('theme-aware starting squad previews', () => {
+    it('puts the selected theme orchestrator first, then maps the preset to its cast order', () => {
+      const preview = squadPreviewForCast('standard', ['riker', 'data', 'picard', 'worf', 'sisko'], 'picard');
+
+      expect(preview.map((member) => member.character)).toEqual(['picard', 'riker', 'data', 'worf', 'sisko']);
+      expect(preview[0]).toMatchObject({ label: 'LEAD', orchestrator: true, character: 'picard' });
+      expect(preview).toHaveLength(5);
+    });
+
+    it('uses the selected cast for the minimal squad and retains preset art when cast entries run out', () => {
+      const minimal = squadPreviewForCast('minimal', ['picard', 'riker']);
+      const partial = squadPreviewForCast('standard', ['picard']);
+
+      expect(minimal.map((member) => member.character)).toEqual(['picard', 'riker']);
+      expect(partial.map((member) => member.character)).toEqual(['picard', 'ada', 'dax', 'gus', 'otto']);
+    });
+  });
+
   describe('floor-scoped themes', () => {
     it('persists independent themes by normalized workspace path and rejects unavailable packs', () => {
       const first = rememberFloorTheme({}, 'C:\\Work\\Alpha', 'munder-difflin');

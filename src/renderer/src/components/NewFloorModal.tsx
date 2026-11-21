@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { SpritePortrait } from './SpritePortrait';
 import { DEFAULT_THEME_ID, type PackSummary } from '@shared/themePack';
+import { loadTheme } from '@/scene/office/themeLoader';
 import {
   FLOOR_NAME_MAX,
   FLOOR_SQUADS,
@@ -8,6 +9,7 @@ import {
   sanitizeFloorName,
   shortenHomePath,
   squadDefinition,
+  squadPreviewForCast,
   type FloorFolderStatus,
   type FloorSquadPreset,
   type NewFloorInfo,
@@ -34,6 +36,8 @@ export function NewFloorModal({ onClose, onCreate }: NewFloorModalProps) {
   const [squad, setSquad] = useState<FloorSquadPreset>('standard');
   const [themes, setThemes] = useState<PackSummary[]>([]);
   const [theme, setTheme] = useState<string>(DEFAULT_THEME_ID);
+  const [themeCharacters, setThemeCharacters] = useState<string[]>([]);
+  const [themeDefaultCharacter, setThemeDefaultCharacter] = useState<string | undefined>();
   const [status, setStatus] = useState<FloorFolderStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +57,24 @@ export function NewFloorModal({ onClose, onCreate }: NewFloorModalProps) {
     return () => { active = false; };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    setThemeCharacters([]);
+    setThemeDefaultCharacter(undefined);
+    void loadTheme(theme).then((loadedTheme) => {
+      if (!active) return;
+      const roster = Object.values(loadedTheme.cast?.byName ?? {});
+      setThemeCharacters([...new Set(roster.map((member) => member.name))]);
+      setThemeDefaultCharacter(loadedTheme.cast?.defaultCharacter);
+    }).catch(() => {
+      if (active) {
+        setThemeCharacters([]);
+        setThemeDefaultCharacter(undefined);
+      }
+    });
+    return () => { active = false; };
+  }, [theme]);
+
   // Live status of whatever folder is typed/picked (git branch, dirty, or locked by a floor).
   useEffect(() => {
     const trimmed = home.trim();
@@ -68,6 +90,7 @@ export function NewFloorModal({ onClose, onCreate }: NewFloorModalProps) {
   const locked = status?.lockedByFloor != null;
   const effectiveName = sanitizeFloorName(name) ?? projectFolderName(home) ?? `Floor ${floorNumber}`;
   const def = squadDefinition(squad);
+  const previewMembers = squadPreviewForCast(squad, themeCharacters, themeDefaultCharacter);
   const canOpen = !!home.trim() && !locked && !busy;
 
   const pickFolder = (path: string) => {
@@ -263,7 +286,7 @@ export function NewFloorModal({ onClose, onCreate }: NewFloorModalProps) {
               })}
             </div>
             <div aria-label="Selected theme character preview" style={{ ...card, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: 18, minHeight: 74, flexWrap: 'wrap' }}>
-              {def.members.map((member) => (
+              {previewMembers.map((member) => (
                 <div key={member.label} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }} title={member.role}>
                   <SpritePortrait character={member.character} scale={1.5} themeId={theme} />
                   <span style={{ fontFamily: 'var(--cth-font-mono)', fontSize: 8.5, color: '#8c8379' }}>{member.label}</span>
