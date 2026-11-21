@@ -404,30 +404,31 @@ export function App() {
       <div
         className="cth-titlebar-drag"
         style={{
-          height: 36, minHeight: 36,
+          height: 32, minHeight: 32,
           background: 'linear-gradient(180deg, var(--cth-cream-100) 0%, var(--cth-cream-200) 100%)',
           borderBottom: '1px solid var(--cth-ink-300)',
           display: 'flex',
           alignItems: 'center',
-          paddingLeft: 96,
-          paddingRight: 12,
-          gap: 12,
+          paddingLeft: 72,
+          paddingRight: 8,
+          gap: 6,
           userSelect: 'none'
         }}
       >
         <img
           src={brandLogo}
           alt="Agent Stage"
-          style={{ height: 20, width: 'auto', display: 'block' }}
+          style={{ height: 18, width: 'auto', display: 'block' }}
         />
         {/* Floor breadcrumb & live isolated status */}
         {floorsSnapshot && (
           <div style={{
             display: 'inline-flex',
             alignItems: 'center',
-            gap: 8,
+            gap: 5,
+            minWidth: 0,
             fontFamily: 'var(--cth-font-mono)',
-            fontSize: 11
+            fontSize: 10
           }}>
             <span style={{ color: 'var(--cth-ink-300)' }}>/</span>
             <span style={{
@@ -447,7 +448,7 @@ export function App() {
               {floorsSnapshot.floors.find((f) => f.floorNumber === floorsSnapshot.currentFloorNumber)?.displayName ?? 'Workspace'}
             </span>
             {floorsSnapshot.floors.find((f) => f.floorNumber === floorsSnapshot.currentFloorNumber)?.displayPath && (
-              <span style={{ color: 'var(--cth-ink-500)', fontSize: 10 }}>
+              <span className="cth-titlebar-floor-path" style={{ color: 'var(--cth-ink-500)', fontSize: 10 }}>
                 {floorsSnapshot.floors.find((f) => f.floorNumber === floorsSnapshot.currentFloorNumber)?.displayPath}
               </span>
             )}

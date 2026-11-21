@@ -112,6 +112,17 @@ canvas, img, svg { image-rendering: pixelated; image-rendering: crisp-edges; }
 /* Drag region for hidden inset title bar (mac) */
 .cth-titlebar-drag { -webkit-app-region: drag; }
 .cth-titlebar-nodrag { -webkit-app-region: no-drag; }
+.cth-titlebar-floor-path {
+  max-width: 16vw;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  .cth-titlebar-floor-path { display: none; }
+}
 
 /* In-app tooltip for title-bar controls.
    The native `title` attribute does not reliably render on buttons inside the
