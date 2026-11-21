@@ -78,8 +78,8 @@ export function App() {
         return true;
       }
     } catch { /* localStorage unavailable — show the picker */ }
-    // A floor window already has its folder (chosen in New Floor); the picker is for the
-    // primary window's launch only. Showing it here put floor 1's folder up as "current".
+    // A secondary floor view already has its folder (chosen in New Floor); the picker is
+    // for the primary floor's launch only. Showing it here put floor 1's folder up as "current".
     try {
       if (new URLSearchParams(window.location.search).has('floor') && window.cth?.harnessHomeSync?.()) return true;
     } catch { /* fall through to the picker */ }
@@ -105,7 +105,7 @@ export function App() {
   const [floorsSnapshot, setFloorsSnapshot] = useState<FloorsSnapshot | null>(null);
   const lastReportedAgents = useRef('');
 
-  // Subscribe to multi-window floors snapshot
+  // Subscribe to the shared floor list from this isolated floor renderer.
   useEffect(() => {
     let active = true;
     if (window.cth?.floors?.list) {
