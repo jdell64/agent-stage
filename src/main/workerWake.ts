@@ -204,6 +204,15 @@ export class WorkerWakeWatchdog {
    *  once per cooldown instead of every 15 s. */
   private lastHoldReportAt = new Map<string, number>();
 
+  /** Clear inbox ids announced before a quota pause so their post-reset delivery
+   *  can be re-armed without discarding the worker's other safety history. */
+  clearAnnounced(agentId: string, ids: readonly string[]): void {
+    const announced = this.announcedInboxIds.get(agentId);
+    if (!announced) return;
+    for (const id of ids) announced.delete(id);
+    if (announced.size === 0) this.announcedInboxIds.delete(agentId);
+  }
+
   /** Record a PTY spawn so its boot sequence is left alone. */
   noteSpawn(ptyId: string, at = Date.now()): void {
     this.spawnedAt.set(ptyId, at);
@@ -222,6 +231,11 @@ export class WorkerWakeWatchdog {
   /** When the agent's hooks last proved a turn, or 0 when they never have. */
   turnHookAt(agentId: string): number {
     return this.lastTurnHookAt.get(agentId) ?? 0;
+  }
+
+  isHumanPromptActive(agentId: string, now = Date.now()): boolean {
+    const at = this.lastHumanNeedsAt.get(agentId) ?? 0;
+    return at > 0 && now - at < WORKER_WAKE_HITL_REARM_MS;
   }
 
   /** The stall rule on everything known: the beat's telemetry evidence plus
