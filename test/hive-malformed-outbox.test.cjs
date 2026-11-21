@@ -25,7 +25,7 @@ async function floor(t) {
   await hive.ensureAgent({ id: 'worker-1', name: 'Creed', provider: 'claude', cwd: home });
 
   const outbox = path.join(home, 'hive', 'agents', 'worker-1', 'outbox');
-  return { hive, outbox };
+  return { hive, outbox, home };
 }
 
 function writeOutbox(outbox, filename, raw) {
@@ -136,4 +136,98 @@ test('an irreparable poison file does not block a valid file in the same pass', 
   assert.equal(fs.existsSync(path.join(outbox, '.sent', 'bad-a-poison.json')), true);
   assert.equal(fs.existsSync(path.join(outbox, '.sent', 'b-good.json')), true);
   assert.equal(eventsFor(hive, 'a-poison.json')[0].reason, 'malformed-json');
+});
+
+test('outboxes without a registry entry are ignored and logged once', async (t) => {
+  const { hive, home } = await floor(t);
+  const realNow = Date.now;
+  let now = realNow();
+  Date.now = () => now;
+  t.after(() => { Date.now = realNow; });
+  const outbox = path.join(hive.root(), 'agents', 'removed-agent', 'outbox');
+  fs.mkdirSync(outbox, { recursive: true });
+  fs.writeFileSync(path.join(outbox, 'phantom.json'), JSON.stringify({ to: 'orchestrator', body: 'not registered' }));
+
+  assert.equal(hive.routeOnce(), 0);
+  assert.equal(hive.routeOnce(), 0);
+  assert.equal(fs.existsSync(path.join(outbox, 'phantom.json')), true);
+  assert.equal(hive.logTail(100).filter((entry) => entry.reason === 'unregistered-outbox' && entry.from === 'removed-agent').length, 1);
+  assert.equal(hive.inbox('orchestrator-1').length, 0);
+
+  const restarted = new HiveManager(() => home);
+  assert.equal(restarted.routeOnce(), 0);
+  assert.equal(restarted.logTail(100).filter((entry) => entry.reason === 'unregistered-outbox' && entry.from === 'removed-agent').length, 1);
+  now += 60 * 60 * 1000 + 1;
+  assert.equal(restarted.routeOnce(), 0);
+  assert.equal(restarted.logTail(100).filter((entry) => entry.reason === 'unregistered-outbox' && entry.from === 'removed-agent').length, 2);
+});
+
+test('overflowing the orphan LRU emits at most one summary per hour', async (t) => {
+  const { hive } = await floor(t);
+  const agents = path.join(hive.root(), 'agents');
+  for (let i = 0; i < 101; i++) {
+    const outbox = path.join(agents, `unknown-${i}`, 'outbox');
+    fs.mkdirSync(outbox, { recursive: true });
+    fs.writeFileSync(path.join(outbox, 'message.json'), '{}');
+  }
+
+  assert.equal(hive.routeOnce(), 0);
+  assert.equal(hive.unregisteredOutboxesLoggedAt.size, 100);
+  assert.equal(hive.logTail(200).filter((entry) => entry.reason === 'unregistered-outbox').length, 100);
+  assert.equal(hive.logTail(200).filter((entry) => entry.reason === 'unregistered-outbox-overflow').length, 1);
+  assert.equal(hive.routeOnce(), 0);
+  assert.equal(hive.logTail(200).filter((entry) => entry.reason === 'unregistered-outbox-overflow').length, 1);
+});
+
+test('archived but registered agents can still route their outbox', async (t) => {
+  const { hive, outbox } = await floor(t);
+  const registryPath = path.join(hive.root(), 'registry.json');
+  const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+  registry.agents['worker-1'].archived = true;
+  fs.writeFileSync(registryPath, JSON.stringify(registry), 'utf8');
+  writeOutbox(outbox, 'archived-agent.json', JSON.stringify({ to: 'orchestrator', act: 'inform', body: 'still registered' }));
+
+  assert.equal(hive.routeOnce(), 1);
+  assert.equal(hive.inbox('orchestrator-1')[0].body, 'still registered');
+});
+
+test('an agent registered immediately before its first outbox write routes normally', async (t) => {
+  const { hive } = await floor(t);
+  await hive.ensureAgent({ id: 'new-agent', name: 'New agent', provider: 'claude', cwd: hive.root() });
+  const outbox = path.join(hive.root(), 'agents', 'new-agent', 'outbox');
+  writeOutbox(outbox, 'first-message.json', JSON.stringify({ to: 'orchestrator', act: 'inform', body: 'first write' }));
+
+  assert.equal(hive.routeOnce(), 1);
+  assert.equal(hive.inbox('orchestrator-1')[0].body, 'first write');
+});
+
+test('delivered messages are copied to durable quarantine before unlink if both archives fail', async (t) => {
+  const { hive, outbox } = await floor(t);
+  fs.rmSync(path.join(outbox, '.sent'), { recursive: true, force: true });
+  fs.writeFileSync(path.join(outbox, '.sent'), 'block archive directory creation');
+  const agents = path.join(hive.root(), 'agents');
+  fs.writeFileSync(path.join(agents, '.outbox-quarantine'), 'block secondary quarantine');
+  const original = JSON.stringify({ to: 'orchestrator', act: 'inform', body: 'delivered once' });
+  writeOutbox(outbox, 'delivered.json', original);
+  const appendLog = hive.appendLog.bind(hive);
+  hive.appendLog = (event) => {
+    if (event.kind === 'outbox-quarantined' && event.quarantine) {
+      assert.equal(fs.existsSync(path.join(outbox, 'delivered.json')), true, 'source remains until quarantine metadata is logged');
+      assert.equal(fs.readFileSync(path.join(hive.root(), event.quarantine), 'utf8'), original, 'durable copy exists before unlink');
+    }
+    appendLog(event);
+  };
+
+  assert.equal(hive.routeOnce(), 1);
+  assert.equal(hive.inbox('orchestrator-1')[0].body, 'delivered once');
+  const quarantine = path.join(hive.root(), 'outbox-quarantine', 'worker-1');
+  const quarantinedFile = fs.readdirSync(quarantine).find((name) => name.startsWith('delivered.json.'));
+  assert.ok(quarantinedFile);
+  assert.equal(fs.readFileSync(path.join(quarantine, quarantinedFile), 'utf8'), original);
+  assert.equal(fs.existsSync(path.join(outbox, 'delivered.json')), false);
+  assert.equal(hive.routeOnce(), 0);
+  assert.equal(hive.inbox('orchestrator-1').filter((message) => message.body === 'delivered once').length, 1);
+  const quarantineEvent = hive.logTail(100).find((entry) => entry.kind === 'outbox-quarantined' && entry.file === 'delivered.json');
+  assert.ok(quarantineEvent);
+  assert.equal(quarantineEvent.id, hive.inbox('orchestrator-1')[0].id, 'durable quarantine log identifies the message');
 });
