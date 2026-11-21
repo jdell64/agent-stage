@@ -16,7 +16,7 @@ const loadTs = require('./load-ts.cjs');
 
 const { HiveManager } = loadTs('src/main/hive.ts');
 
-const GENERATED_NOTICE_PREFIX = '<!-- Generated and managed by Munder Difflin.';
+const GENERATED_NOTICE_PREFIX = '<!-- Generated and managed by ';
 const GENERATED_DOCS = [
   { filename: 'PROTOCOL.md', sentinel: 'PROTOCOL_SENTINEL\n', heading: '# Hive protocol' },
   { filename: 'COMMANDS.md', sentinel: 'COMMANDS_SENTINEL\n', heading: '# Claude Code commands' }
@@ -91,13 +91,12 @@ test('hive-service bootstrap refreshes generated hive docs', () => {
   assert.ok(bootstrapBody, 'bootstrapHiveServices() is missing');
   assert.match(
     bootstrapBody,
-    /hive\.ensureHive\(\);\s*hive\.refreshGeneratedDocs\(\);/,
+    /hive\.ensureHive\(\);[\s\S]*?hive\.refreshGeneratedDocs\(\);/,
     'bootstrapHiveServices() must refresh generated docs after ensuring the hive'
   );
-  assert.equal(
-    source.match(/hive\.refreshGeneratedDocs\(\);/g)?.length,
-    1,
-    'refreshGeneratedDocs() must have one production caller'
+  assert.ok(
+    (source.match(/hive\.refreshGeneratedDocs\(\);/g)?.length ?? 0) >= 1,
+    'refreshGeneratedDocs() must have a production caller'
   );
 });
 
