@@ -71,6 +71,15 @@ test('quota wake clears only dedup ids for paused inbox messages', () => {
   assert.deepEqual([...seen], ['old']);
 });
 
+test('archiving an agent clears its pending quota wake', () => {
+  const q = new QuotaWakeScheduler();
+  q.schedule('a', 'claude', 1000, ['m1'], 0);
+  assert.ok(q.get('a'));
+  q.clear('a');
+  assert.equal(q.get('a'), undefined);
+  assert.deepEqual(q.snapshot(), []);
+});
+
 test('quota notice detection handles split PTY output and reset snapshots', () => {
   const tails = new Map();
   assert.equal(markQuotaNoticeSeen(tails, 'a', "You've hit your usage "), false);

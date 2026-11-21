@@ -935,7 +935,11 @@ function teardownPty(id: string, opts?: { preserveWorktree?: boolean }, owner?: 
     // PTY never leaves an orphan loopback listener. No-op for non-proxy agents.
     try { activeHive.stopProxyBridge(agentId); } catch (e) { console.error('[hive] stopProxyBridge failed:', e); }
     if (activeHive.enabled()) {
-      try { activeHive.setArchived(agentId, true); } catch (e) { console.error('[hive] setArchived failed:', e); }
+      try {
+        activeHive.setArchived(agentId, true);
+        quotaWake.clear(agentId);
+        writeConfig({ quotaWakeStates: quotaWake.snapshot() });
+      } catch (e) { console.error('[hive] setArchived failed:', e); }
     }
   }
   // 2) Remove the isolated worktree, if any. Non-blocking; errors are logged.
@@ -1491,6 +1495,8 @@ function archiveOrphanedAgents(): void {
       if (id === reg.orchestratorId) continue;        // orchestrator is never archived
       if (ptyForAgent(id)) continue;         // has a live PTY → genuinely active
       hive.setArchived(id, true);            // stale archived:false orphan → archive
+      quotaWake.clear(id);
+      writeConfig({ quotaWakeStates: quotaWake.snapshot() });
       console.log('[migration] archived orphaned agent (no live PTY):', id);
     }
   } catch (e) {
@@ -4551,6 +4557,10 @@ ipcMain.handle('hive:setArchived', (evt, id: unknown, archived: unknown) => {
   const activeHive = fl?.hive ?? hive;
   if (!activeHive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
   activeHive.setArchived(id, archived === true);
+  if (archived === true) {
+    quotaWake.clear(id);
+    writeConfig({ quotaWakeStates: quotaWake.snapshot() });
+  }
   return { ok: true };
 });
 ipcMain.handle('hive:patchAgentRole', (evt, id: unknown, role: unknown) => {
@@ -5839,6 +5849,10 @@ registerRealtimeActionIpc({
   setArchived: (id, archived) => {
     if (!hive.enabled()) return { ok: false, error: 'hive disabled' };
     hive.setArchived(id, archived);
+    if (archived) {
+      quotaWake.clear(id);
+      writeConfig({ quotaWakeStates: quotaWake.snapshot() });
+    }
     try { liveWebContents()?.send(archived ? 'hive:agentArchived' : 'hive:agentSpawned', { id }); } catch { /* window gone */ }
     return { ok: true };
   },
