@@ -103,11 +103,15 @@ test('irreparable structural JSON is logged and quarantined', async (t) => {
 
   const events = eventsFor(hive, filename);
   assert.equal(events.filter((entry) => entry.kind === 'outbox-repair').length, 0);
-  assert.equal(events.length, 1);
-  assert.equal(events[0].kind, 'drop');
-  assert.equal(events[0].reason, 'malformed-json');
-  assert.equal(events[0].from, 'worker-1');
-  assert.equal('error' in events[0], false, 'parser context and raw payload must not enter the durable log');
+  const drop = events.find((entry) => entry.kind === 'drop');
+  assert.ok(drop);
+  assert.equal(drop.reason, 'malformed-json');
+  assert.equal(drop.from, 'worker-1');
+  assert.equal('error' in drop, false, 'parser context and raw payload must not enter the durable log');
+  const notice = hive.inbox('worker-1').find((message) => message.subject === `[outbox rejected] ${filename}`);
+  assert.ok(notice, 'the sender receives a durable repair notice');
+  assert.match(notice.body, /Parse error:/);
+  assert.match(notice.body, /real JSON serializer/);
 });
 
 test('escaped quotes and backslashes keep their JSON semantics', async (t) => {
