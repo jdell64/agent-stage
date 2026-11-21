@@ -34,6 +34,13 @@ Contributions are welcome through pull requests. Keep them easy to review.
 - Do not assume another developer's files, credentials, processes, or shell are available.
 - Do not commit credentials, tokens, customer data, `node_modules`, build output, or generated artifacts.
 
+## Theme-pack boundary
+
+- `resources/themes/` is the app's core and may contain only the original, theme-neutral `plain` fallback. The test `test/themes/plainPack.test.ts` enforces this packaging boundary.
+- Do not copy or merge upstream Munder Difflin office-theme maps, sprites, cast, copy, or branding into `resources/themes/` or other core runtime paths. Keep theme-specific assets in a standalone pack and load them from the user's themes folder or the configurable `themesDir` setting (for example, a local themes checkout).
+- TNG, office/Munder Difflin, DS9, Princess Bride, and other non-default themes are optional packs; the app must continue to work with only `plain` installed. Keep app logos and icons generic and theme-neutral.
+- When syncing or merging upstream, preserve this boundary even if upstream adds theme assets or branding to its default app paths. Port behavior/code selectively; do not bring those assets into the core bundle.
+
 ## Development setup
 
 ```bash
