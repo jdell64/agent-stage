@@ -129,7 +129,7 @@ import {
 } from '../shared/floors';
 import { BuildingMemory } from './buildingMemory';
 import { claimInterrupt, interruptAuditBody, interruptKeyForProvider } from '../shared/interrupt';
-import { acquireHiveInstanceLock, type HiveInstanceLock } from './hiveInstanceLock';
+import { acquireOrReuseHiveInstanceLock, type HiveInstanceLock } from './hiveInstanceLock';
 
 // Dev isolation: apply MD_USER_DATA_DIR early before config, db, or hive initialize
 if (process.env.MD_USER_DATA_DIR && typeof process.env.MD_USER_DATA_DIR === 'string') {
@@ -4126,6 +4126,8 @@ ipcMain.handle('config:changeHome', async (evt, payload: unknown) => {
   try { stopSlackServer(); } catch (e) { console.error('[changeHome] slack.stop:', e); }
   try { stopWebhookServer(); } catch (e) { console.error('[changeHome] webhook.stop:', e); }
   try { memory.stop(); } catch (e) { console.error('[changeHome] memory.stop:', e); }
+  hiveInstanceLock?.release();
+  hiveInstanceLock = null;
   // Close the hive's kept-open log and ledger before the copy (and the relaunch).
   try { hive.closeAppendFiles(); } catch (e) { console.error('[changeHome] hive.closeAppendFiles:', e); }
   try { reflector.stop(); } catch (e) { console.error('[changeHome] reflector.stop:', e); }
@@ -6382,7 +6384,7 @@ function bootstrapHiveServices(): void {
   if (!hive.enabled()) return;
   const root = hive.root();
   if (!root) return;
-  const acquired = acquireHiveInstanceLock(root);
+  const acquired = acquireOrReuseHiveInstanceLock(hiveInstanceLock, root);
   if (!acquired.ok) {
     dialog.showErrorBox('Agent Stage is already running', `The hive is already owned by another Agent Stage process (PID ${acquired.ownerPid ?? 'unknown'}). This instance will not modify the floor.`);
     allowQuit = true;

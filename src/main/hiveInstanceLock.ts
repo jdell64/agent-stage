@@ -1,5 +1,5 @@
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 export interface HiveInstanceLock {
@@ -7,6 +7,8 @@ export interface HiveInstanceLock {
   nonce: string;
   release(): void;
 }
+
+export type HiveInstanceLockResult = { ok: true; lock: HiveInstanceLock } | { ok: false; ownerPid?: number };
 
 const MALFORMED_LOCK_STALE_MS = 30_000;
 
@@ -16,7 +18,7 @@ function ownerAlive(pid: number): boolean {
 }
 
 /** Acquire an exclusive lock owned by the process using a hive root. */
-export function acquireHiveInstanceLock(root: string): { ok: true; lock: HiveInstanceLock } | { ok: false; ownerPid?: number } {
+export function acquireHiveInstanceLock(root: string): HiveInstanceLockResult {
   mkdirSync(root, { recursive: true });
   const path = join(root, '.agent-stage-instance.lock');
   for (let attempt = 0; attempt < 8; attempt++) {
@@ -64,4 +66,12 @@ export function acquireHiveInstanceLock(root: string): { ok: true; lock: HiveIns
     }
   }
   return { ok: false };
+}
+
+/** Reuse our current lock for the same hive; release it before acquiring a different root. */
+export function acquireOrReuseHiveInstanceLock(current: HiveInstanceLock | null, root: string): HiveInstanceLockResult {
+  const expectedPath = join(resolve(root), '.agent-stage-instance.lock');
+  if (current && resolve(current.path) === resolve(expectedPath)) return { ok: true, lock: current };
+  current?.release();
+  return acquireHiveInstanceLock(root);
 }

@@ -6,7 +6,7 @@ const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const loadTs = require('./load-ts.cjs');
-const { acquireHiveInstanceLock } = loadTs('src/main/hiveInstanceLock.ts');
+const { acquireHiveInstanceLock, acquireOrReuseHiveInstanceLock } = loadTs('src/main/hiveInstanceLock.ts');
 const execFileAsync = promisify(execFile);
 
 test('only one process can own a hive-root lock and release permits takeover', () => {
@@ -20,6 +20,39 @@ test('only one process can own a hive-root lock and release permits takeover', (
   assert.equal(third.ok, true);
   if (third.ok) third.lock.release();
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('same-root re-bootstrap reuses the held lock instead of self-locking out', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-stage-lock-rebootstrap-'));
+  const first = acquireHiveInstanceLock(root);
+  assert.equal(first.ok, true);
+  if (first.ok) {
+    const again = acquireOrReuseHiveInstanceLock(first.lock, root);
+    assert.equal(again.ok, true);
+    if (again.ok) assert.equal(again.lock, first.lock);
+    assert.equal(acquireHiveInstanceLock(root).ok, false, 'the same exclusive lock remains held');
+    first.lock.release();
+  }
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('root switch releases old lock before acquiring the new hive', () => {
+  const oldRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-stage-lock-old-'));
+  const newRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-stage-lock-new-'));
+  const old = acquireHiveInstanceLock(oldRoot);
+  assert.equal(old.ok, true);
+  if (old.ok) {
+    const switched = acquireOrReuseHiveInstanceLock(old.lock, newRoot);
+    assert.equal(switched.ok, true);
+    if (switched.ok) {
+      assert.notEqual(switched.lock.path, old.lock.path);
+      assert.equal(fs.existsSync(old.lock.path), false);
+      assert.equal(acquireHiveInstanceLock(newRoot).ok, false, 'new root is now held');
+      switched.lock.release();
+    }
+  }
+  fs.rmSync(oldRoot, { recursive: true, force: true });
+  fs.rmSync(newRoot, { recursive: true, force: true });
 });
 
 test('concurrent stale-lock contenders leave exactly one owner', async () => {
