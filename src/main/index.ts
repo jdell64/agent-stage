@@ -2809,7 +2809,7 @@ if (process.defaultApp) {
 const APP_USER_MODEL_ID = 'com.agentstage.app';
 if (process.platform === 'win32') app.setAppUserModelId(APP_USER_MODEL_ID);
 function appWindowIconPath(): string {
-  const file = process.platform === 'win32' ? 'agent-stage.ico' : 'agent-stage.png';
+  const file = process.platform === 'win32' ? 'icon.ico' : 'icon.png';
   return app.isPackaged ? join(process.resourcesPath, file) : join(app.getAppPath(), 'build', file);
 }
 
@@ -6672,7 +6672,7 @@ app.whenReady().then(() => {
     return;
   }
   if (process.platform === 'darwin' && !app.isPackaged) {
-    app.dock?.setIcon(join(app.getAppPath(), 'build/agent-stage.png'));
+    app.dock?.setIcon(join(app.getAppPath(), 'build/icon.png'));
   }
   // Realtime voice mic-gate hygiene (rt-8 / Pam rt-10 nit): the voice session
   // opens the mic permission gate by persisting realtimeVoiceEnabled=true and

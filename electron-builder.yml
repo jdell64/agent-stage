@@ -60,10 +60,10 @@ files:
 # resources dir (process.resourcesPath). It runs under `node`, NOT inside the
 # asar, so the office worker can invoke `node <resources>/md-slack-reply.cjs`.
 extraResources:
-  - from: build/agent-stage.png
-    to: agent-stage.png
-  - from: build/agent-stage.ico
-    to: agent-stage.ico
+  - from: build/icon.png
+    to: icon.png
+  - from: build/icon.ico
+    to: icon.ico
   - from: resources/md-slack-reply.cjs
     to: md-slack-reply.cjs
   # Knowledge Graph agent CLI + its pure-JS core. Agents invoke `node
@@ -94,7 +94,7 @@ npmRebuild: true
 # ---- macOS ----
 mac:
   category: public.app-category.developer-tools
-  icon: build/agent-stage.icns
+  icon: build/icon.icns
   # Declare WHY the app touches the user's folders. macOS shows these strings in
   # the privacy prompt and, for a signed app, remembers the grant — so the user
   # is asked ONCE instead of on every agent action.
@@ -144,7 +144,7 @@ dmg:
 
 # ---- Windows ----
 win:
-  icon: build/agent-stage.ico
+  icon: build/icon.ico
   target:
     - target: nsis
       arch: [x64]
@@ -164,7 +164,7 @@ portable:
 # ---- Linux ----
 linux:
   category: Development
-  icon: build/agent-stage.png
+  icon: build/icon.png
   target:
     - target: AppImage
       arch: [x64]
