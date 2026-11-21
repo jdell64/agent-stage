@@ -129,6 +129,7 @@ import {
 } from '../shared/floors';
 import { BuildingMemory } from './buildingMemory';
 import { claimInterrupt, interruptAuditBody, interruptKeyForProvider } from '../shared/interrupt';
+import { acquireHiveInstanceLock, type HiveInstanceLock } from './hiveInstanceLock';
 
 // Dev isolation: apply MD_USER_DATA_DIR early before config, db, or hive initialize
 if (process.env.MD_USER_DATA_DIR && typeof process.env.MD_USER_DATA_DIR === 'string') {
@@ -285,6 +286,7 @@ const hive = new HiveManager(
     try { wc.send(channel, payload); return true; } catch { return false; }
   }
 );
+let hiveInstanceLock: HiveInstanceLock | null = null;
 // LOG-STALL-AV: the app keeps log.jsonl / cost-ledger.jsonl open (closed on reset, change-home, quit).
 hive.keepAppendFilesOpen(true);
 if (process.env.MD_HOOKS_PIPE) {
@@ -6379,6 +6381,16 @@ ipcMain.handle('workers:stop', (_evt, workerId: string): { ok: boolean; error?: 
 function bootstrapHiveServices(): void {
   if (!hive.enabled()) return;
   hive.ensureHive();
+  const root = hive.root();
+  if (!root) return;
+  const acquired = acquireHiveInstanceLock(root);
+  if (!acquired.ok) {
+    dialog.showErrorBox('Agent Stage is already running', `The hive is already owned by another Agent Stage process (PID ${acquired.ownerPid ?? 'unknown'}). This instance will not modify the floor.`);
+    allowQuit = true;
+    app.quit();
+    return;
+  }
+  hiveInstanceLock = acquired.lock;
   hive.refreshGeneratedDocs();
   // Tell the hive what it is running inside, BEFORE anything spawns: the prompt
   // builder reads this, so an agent spawned earlier would never learn it.
@@ -6651,7 +6663,12 @@ app.whenReady().then(() => {
   // single-instance lock was denied. Do not bootstrap the hive in that process:
   // startup migration would otherwise archive agents belonging to the already
   // running instance before app.quit() finishes.
-  if (!gotInstanceLock) return;
+  if (!gotInstanceLock) {
+    // The earlier app.quit() can run before Electron is ready and be ignored.
+    // Quit again here, after readiness, without creating a window or restoring floors.
+    app.quit();
+    return;
+  }
   if (process.platform === 'darwin' && !app.isPackaged) {
     app.dock?.setIcon(join(app.getAppPath(), 'build/agent-stage.png'));
   }
@@ -6724,6 +6741,8 @@ app.whenReady().then(() => {
 // before-quit covers Cmd-Q / dock-quit; the per-window close handler covers
 // the red close button. Both routes hit the same warning UX.
 app.on('before-quit', (e) => {
+  hiveInstanceLock?.release();
+  hiveInstanceLock = null;
   if (allowQuit) return;
   const count = ptyManager.list().length;
   if (count === 0) return;
