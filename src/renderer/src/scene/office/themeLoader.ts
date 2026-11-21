@@ -283,6 +283,7 @@ function packPayloadToThemeConfig(payload: PackPayload, id: ThemeId): ThemeConfi
     cameraBounds: manifest.cameraBounds,
     quips: manifest.quips,
     errandSpots: manifest.errandSpots.map((s) => ({ ...s })),
+    idleZones: manifest.idleZones?.map((tile) => ({ ...tile })),
     monitor: {
       offTopLeftGid: manifest.monitor.offTopLeftGid,
       onGids: manifest.monitor.onGids.map((g) => [g[0], g[1], g[2]] as const),

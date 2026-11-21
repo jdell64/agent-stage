@@ -1458,6 +1458,7 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
           frames,
           seatTile,
           seatDirection: facingForSeat(seatTile, seatInfo?.name),
+          idleZones: theme.idleZones,
           spawnTile: entrance, // walk in from the office door
           glowColor: hexNum(colors.accent[agent.accent]) ?? hexToNumber(member.shirt),
           onClick: (id) => useStore.getState().select(id),

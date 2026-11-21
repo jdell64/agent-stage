@@ -100,6 +100,8 @@ interface CharacterOptions {
   glowColor: number;
   /** Direction faced while seated. Default 'down' so the face is toward the user. */
   seatDirection?: Direction;
+  /** Theme-owned idle destinations. When absent, use local wandering. */
+  idleZones?: readonly { x: number; y: number }[];
   onClick?: (agentId: string) => void;
 }
 
@@ -126,6 +128,7 @@ export class Character {
   private idleLoopTimer = 0;
   private direction: Direction = 'down';
   private arrivalCallback: (() => void) | null = null;
+  private idleZones: readonly { x: number; y: number }[];
 
   public isVisible = false;
   private fadeDirection: 'in' | 'out' | null = null;
@@ -180,6 +183,7 @@ export class Character {
     this.sprite = new CharacterSprite(options.frames);
     this.deskTile = options.seatTile;
     this.seatDirection = options.seatDirection ?? 'down';
+    this.idleZones = options.idleZones ?? [];
     this.onClick = options.onClick;
 
     // Appear at the spawn tile (the door) and walk in from there.
@@ -976,8 +980,20 @@ export class Character {
     if (this.idleTimer < this.idleWanderDelay) return;
     this.idleTimer = 0;
     this.idleWanderDelay = 1 + Math.random() * 3;
-    // Pick a nearby walkable tile and stroll to it.
+    // Prefer a theme-owned idle destination so a pack can spread workers over
+    // several recognizable areas instead of clustering around one random tile.
     const cur = this.getTilePosition();
+    if (this.idleZones.length > 0) {
+      const candidates = this.idleZones.filter((zone) => zone.x !== cur.x || zone.y !== cur.y);
+      const zone = candidates[Math.floor(Math.random() * candidates.length)];
+      if (zone && this.mapRenderer.isWalkable(zone.x, zone.y)) {
+        const wasWandering = this.wandering;
+        this.moveTo(zone);
+        this.wandering = wasWandering;
+        return;
+      }
+    }
+    // Fallback for themes without declared zones: pick a nearby walkable tile.
     const range = 6;
     for (let attempt = 0; attempt < 14; attempt++) {
       const tx = cur.x + Math.floor(Math.random() * range * 2) - range;

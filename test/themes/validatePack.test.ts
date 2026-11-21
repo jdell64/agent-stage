@@ -112,10 +112,16 @@ describe('validatePack: happy path', () => {
     expect(r.pack).not.toBeNull();
     expect(r.pack!.manifest.seats.facing).toEqual({ 'desk-ceo': 'down', 'cafe-seat-1': 'left' });
   });
+  it('accepts theme-owned idle zones', () => {
+    const r = validatePack(pack(baseManifest({ idleZones: [{ x: 2, y: 2 }, { x: 7, y: 7 }] })));
+    expect(codes(r, 'error')).toEqual([]);
+    expect(r.pack!.manifest.idleZones).toEqual([{ x: 2, y: 2 }, { x: 7, y: 7 }]);
+  });
 });
 
 describe('validatePack: errors reject the pack whole', () => {
   it.each([
+    ['idle zones must be tiles', () => pack(baseManifest({ idleZones: [{ x: 2, y: 'bad' } as any] })), 'bad-idle-zones'],
     ['missing theme.json', () => { const p = pack(); delete p.files['theme.json']; return p; }, 'missing-manifest'],
     ['unparseable theme.json', () => { const p = pack(); p.files['theme.json'] = enc('{nope'); return p; }, 'bad-manifest'],
     ['unsupported schema', () => pack({ ...baseManifest(), schema: 2 }), 'unsupported-schema'],
