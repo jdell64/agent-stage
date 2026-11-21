@@ -131,6 +131,7 @@ import {
 import { BuildingMemory } from './buildingMemory';
 import { claimInterrupt, interruptAuditBody, interruptKeyForProvider } from '../shared/interrupt';
 import { acquireOrReuseHiveInstanceLock, type HiveInstanceLock } from './hiveInstanceLock';
+import { hookEndpointForInstance } from '../shared/hookEndpoint';
 
 // Dev isolation: apply MD_USER_DATA_DIR early before config, db, or hive initialize
 if (process.env.MD_USER_DATA_DIR && typeof process.env.MD_USER_DATA_DIR === 'string') {
@@ -294,6 +295,11 @@ hive.keepAppendFilesOpen(true);
 if (process.env.MD_HOOKS_PIPE) {
   const customPipe = process.env.MD_HOOKS_PIPE;
   hive.sockPath = () => customPipe;
+} else {
+  hive.sockPath = () => {
+    const root = hive.root();
+    return root ? hookEndpointForInstance(app.getPath('userData'), root) : null;
+  };
 }
 // #7C — operator control state (pause/gate/steer/halt), read by the HookServer
 // when deciding hook returns.
@@ -533,6 +539,10 @@ function createSecondaryFloorRuntime(
       try { wc.send(channel, payload); return true; } catch { return false; }
     }
   );
+  floorHive.sockPath = () => {
+    const root = floorHive.root();
+    return root ? hookEndpointForInstance(app.getPath('userData'), root) : null;
+  };
   floorHive.keepAppendFilesOpen(true);
 
   const floorRoster = new RosterStore(getHome);

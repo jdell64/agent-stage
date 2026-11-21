@@ -518,7 +518,7 @@ export class HiveManager {
     if (!root) return null;
     if (process.platform === 'win32') {
       const id = createHash('sha1').update(root).digest('hex').slice(0, 12);
-      return `\\\\.\\pipe\\munder-difflin-${id}`;
+      return `\\\\.\\pipe\\agent-stage-hooks-${id}`;
     }
     return join(root, 'hooks.sock');
   }
