@@ -1173,7 +1173,11 @@ export function useHive(config: HarnessConfig | null): void {
         id: rec.id,
         // A main-side spawn may have no human-facing name. Never surface its
         // ticket/agent id as the floor label; use the selected theme character.
-        name: rec.name?.trim() || spawnDisplayName(character, themed.length ? themed : CAST),
+        name: rec.name?.trim() || spawnDisplayName(
+          character,
+          themed.length ? themed : CAST,
+          useStore.getState().agents.map((a) => a.name)
+        ),
         character: character as Agent["character"],
         accent: askedAccent ?? SPAWN_ACCENTS[h],
         description: rec.role || 'a fresh harness',

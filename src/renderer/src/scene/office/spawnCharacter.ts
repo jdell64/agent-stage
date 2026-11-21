@@ -58,6 +58,17 @@ export function pickSpawnCharacter(opts: {
 }
 
 /** Resolve the name shown on the floor for a selected character. */
-export function spawnDisplayName(character: string, roster: readonly SpawnCastMember[]): string {
-  return roster.find((member) => member.name === character)?.displayName?.trim() || character;
+export function spawnDisplayName(
+  character: string,
+  roster: readonly SpawnCastMember[],
+  usedDisplayNames: readonly string[] = []
+): string {
+  const base = roster.find((member) => member.name === character)?.displayName?.trim() || character;
+  const used = new Set(usedDisplayNames.map((name) => name.trim().toLowerCase()));
+  if (!used.has(base.toLowerCase())) return base;
+  const generic = GENERIC_ENSIGN_NAMES.find((name) => !used.has(name.toLowerCase()));
+  if (generic) return generic;
+  let suffix = 2;
+  while (used.has(`${base} ${suffix}`.toLowerCase())) suffix += 1;
+  return `${base} ${suffix}`;
 }
