@@ -2954,6 +2954,38 @@ function createWindow(): BrowserWindow {
   const wc = win.webContents;
   const wcId = wc.id;
 
+  // Chromium's default context menu is disabled by the custom application menu,
+  // so provide the editing and spellcheck actions at the actual right-click
+  // target. Keep the menu local to this window and only expose edit actions when
+  // Chromium says the focused target supports them.
+  wc.on('context-menu', (_event, params) => {
+    const editFlags = params.editFlags;
+    const template: Electron.MenuItemConstructorOptions[] = [];
+    if (params.misspelledWord && params.dictionarySuggestions.length > 0) {
+      for (const suggestion of params.dictionarySuggestions.slice(0, 5)) {
+        template.push({
+          label: suggestion,
+          click: () => wc.replaceMisspelling(suggestion)
+        });
+      }
+      template.push({ type: 'separator' });
+    }
+    if (params.isEditable) {
+      if (editFlags.canUndo || editFlags.canRedo) {
+        if (editFlags.canUndo) template.push({ role: 'undo' });
+        if (editFlags.canRedo) template.push({ role: 'redo' });
+        template.push({ type: 'separator' });
+      }
+      if (editFlags.canCut) template.push({ role: 'cut' });
+      if (editFlags.canCopy) template.push({ role: 'copy' });
+      if (editFlags.canPaste) template.push({ role: 'paste' });
+      if (editFlags.canSelectAll) template.push({ role: 'selectAll' });
+    } else if (editFlags.canCopy) {
+      template.push({ role: 'copy' });
+    }
+    if (template.length > 0) Menu.buildFromTemplate(template).popup({ window: win });
+  });
+
   floorsByWcId.set(wcId, {
     floorNumber: 1,
     win,
