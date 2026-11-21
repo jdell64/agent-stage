@@ -563,6 +563,8 @@
     "runOnOpenModels": "run on open models",
     "setUpMacMini": "set up on a Mac Mini",
     "command": "Command",
+    "codexFullAccess": "Codex full filesystem access (-s danger-full-access)",
+    "codexFullAccessWarning": "Off by default; enabling removes Codex's OS sandbox for this agent.",
     "commandAuto": "Command (auto mode on)",
     "templates": "Templates",
     "templatesHint": {

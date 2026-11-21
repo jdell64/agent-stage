@@ -33,6 +33,7 @@ import {
   isClaudeProvider
 } from '@/store/config';
 import { useRtl } from '@/i18n/useDirection';
+import { setCodexFullAccess } from '@shared/codexCommands';
 
 const ACCENTS: AccentColorName[] = ['coral', 'mint', 'sky', 'lemon', 'lilac', 'peach'];
 
@@ -221,12 +222,21 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
       setFolderNote(undefined);
     }
     if (id === 'custom') {
-      setCommand(command.trim() || config.defaultCommand || '');
+      setCommand(setCodexFullAccess(command.trim() || config.defaultCommand || '', false));
       return;
     }
-    setCommand(buildSpawnCommand(config, nextModel, id));
+    setCommand(setCodexFullAccess(buildSpawnCommand(config, nextModel, id), id === 'codex' && codexFullAccess));
   };
   const preset = providerPreset(provider);
+  const codexFullAccess = provider === 'codex' && /(?:^|\s)-s\s+danger-full-access(?:\s|$)/.test(command);
+  const toggleCodexFullAccess = () => {
+    if (provider !== 'codex') return;
+    if (codexFullAccess) {
+      setCommand(setCodexFullAccess(command, false));
+    } else {
+      setCommand(setCodexFullAccess(command, true));
+    }
+  };
   const [goal, setGoal] = useState(pendingHire?.goal ?? '');
   const [isolate, setIsolate] = useState(pendingHire?.isolate ?? false);
   // #2 — optional Claude session id to continue. When set, the spawn seeds that
@@ -1009,6 +1019,15 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                         style={{ ...inputStyle, fontFamily: 'var(--cth-font-mono)' }}
                       />
                     </Row>
+                    {provider === 'codex' && (
+                      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, margin: '4px 0 6px', fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-700)', cursor: 'pointer' }}>
+                        <input type="checkbox" checked={codexFullAccess} onChange={toggleCodexFullAccess} />
+                        <span>
+                          <strong>{tr('addAgent.codexFullAccess')}</strong>{' '}
+                          <span style={{ color: 'var(--cth-coral)' }}>{tr('addAgent.codexFullAccessWarning')}</span>
+                        </span>
+                      </label>
+                    )}
                   </>
                 )}
 

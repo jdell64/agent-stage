@@ -11,6 +11,16 @@
  */
 import type { CmdGroup } from './claudeCommands';
 
+/** Add/remove the explicit full-access sandbox flag without touching other
+ * launch arguments. This is intentionally opt-in; callers must pass `true`. */
+export function setCodexFullAccess(command: string, enabled: boolean): string {
+  const stripped = command
+    .replace(/(?:^|\s)-s\s+danger-full-access(?=\s|$)/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  return enabled ? `${stripped} -s danger-full-access`.trim() : stripped;
+}
+
 export const CODEX_COMMAND_GROUPS: CmdGroup[] = [
   {
     title: 'SESSION',
