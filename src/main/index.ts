@@ -129,6 +129,7 @@ import {
 } from '../shared/floors';
 import { BuildingMemory } from './buildingMemory';
 import { claimInterrupt, interruptAuditBody, interruptKeyForProvider } from '../shared/interrupt';
+import { acquireOrReuseHiveInstanceLock, type HiveInstanceLock } from './hiveInstanceLock';
 
 // Dev isolation: apply MD_USER_DATA_DIR early before config, db, or hive initialize
 if (process.env.MD_USER_DATA_DIR && typeof process.env.MD_USER_DATA_DIR === 'string') {
@@ -285,6 +286,7 @@ const hive = new HiveManager(
     try { wc.send(channel, payload); return true; } catch { return false; }
   }
 );
+let hiveInstanceLock: HiveInstanceLock | null = null;
 // LOG-STALL-AV: the app keeps log.jsonl / cost-ledger.jsonl open (closed on reset, change-home, quit).
 hive.keepAppendFilesOpen(true);
 if (process.env.MD_HOOKS_PIPE) {
@@ -4124,6 +4126,8 @@ ipcMain.handle('config:changeHome', async (evt, payload: unknown) => {
   try { stopSlackServer(); } catch (e) { console.error('[changeHome] slack.stop:', e); }
   try { stopWebhookServer(); } catch (e) { console.error('[changeHome] webhook.stop:', e); }
   try { memory.stop(); } catch (e) { console.error('[changeHome] memory.stop:', e); }
+  hiveInstanceLock?.release();
+  hiveInstanceLock = null;
   // Close the hive's kept-open log and ledger before the copy (and the relaunch).
   try { hive.closeAppendFiles(); } catch (e) { console.error('[changeHome] hive.closeAppendFiles:', e); }
   try { reflector.stop(); } catch (e) { console.error('[changeHome] reflector.stop:', e); }
@@ -6378,6 +6382,16 @@ ipcMain.handle('workers:stop', (_evt, workerId: string): { ok: boolean; error?: 
  *  (config:changeHome tears these down before copying). No-op without a home. */
 function bootstrapHiveServices(): void {
   if (!hive.enabled()) return;
+  const root = hive.root();
+  if (!root) return;
+  const acquired = acquireOrReuseHiveInstanceLock(hiveInstanceLock, root);
+  if (!acquired.ok) {
+    dialog.showErrorBox('Agent Stage is already running', `The hive is already owned by another Agent Stage process (PID ${acquired.ownerPid ?? 'unknown'}). This instance will not modify the floor.`);
+    allowQuit = true;
+    app.quit();
+    return;
+  }
+  hiveInstanceLock = acquired.lock;
   hive.ensureHive();
   hive.refreshGeneratedDocs();
   // Tell the hive what it is running inside, BEFORE anything spawns: the prompt
@@ -6647,6 +6661,16 @@ function onSystemResume(reason: string): void {
 }
 
 app.whenReady().then(() => {
+  // Electron may still deliver `whenReady` to a second process after the
+  // single-instance lock was denied. Do not bootstrap the hive in that process:
+  // startup migration would otherwise archive agents belonging to the already
+  // running instance before app.quit() finishes.
+  if (!gotInstanceLock) {
+    // The earlier app.quit() can run before Electron is ready and be ignored.
+    // Quit again here, after readiness, without creating a window or restoring floors.
+    app.quit();
+    return;
+  }
   if (process.platform === 'darwin' && !app.isPackaged) {
     app.dock?.setIcon(join(app.getAppPath(), 'build/agent-stage.png'));
   }
@@ -6759,6 +6783,8 @@ let willQuitHandled = false;
 app.on('will-quit', (e) => {
   if (willQuitHandled) return;
   willQuitHandled = true;
+  hiveInstanceLock?.release();
+  hiveInstanceLock = null;
   e.preventDefault();
   try { hive.closeAppendFiles(); } catch { /* rows are on disk */ }
   app.exit(0);
