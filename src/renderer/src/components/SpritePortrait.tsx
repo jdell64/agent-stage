@@ -4,6 +4,7 @@ import { PORTRAIT_W, PORTRAIT_H } from '@/scene/office/portraitArt';
 import { useStore } from '@/store/store';
 import { getTheme } from '@/scene/office/themeRegistry';
 import { loadTheme } from '@/scene/office/themeLoader';
+import type { ThemeId } from '@/scene/office/themeRegistry';
 
 const FRAME_W = PORTRAIT_W;
 const FRAME_H = PORTRAIT_H;
@@ -15,13 +16,16 @@ export interface SpritePortraitProps {
    *  smoothing off, so nothing here is ever interpolated. */
   scale?: number;
   background?: string;
+  /** Optional floor-specific theme; defaults to the current renderer's theme. */
+  themeId?: ThemeId;
 }
 
 /** Standing portrait of a cast member (theme custom sprite or procedurally drawn). */
 export function SpritePortrait({
   character,
   scale = 2,
-  background = 'transparent'
+  background = 'transparent',
+  themeId
 }: SpritePortraitProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const officeTheme = useStore((s) => s.officeTheme);
@@ -43,9 +47,10 @@ export function SpritePortrait({
     const draw = async () => {
       // First check if current theme has custom getFrames
       try {
-        let theme = getTheme(officeTheme);
+        const selectedTheme = themeId ?? officeTheme;
+        let theme = getTheme(selectedTheme);
         if (!theme) {
-          theme = await loadTheme(officeTheme);
+          theme = await loadTheme(selectedTheme);
         }
         if (cancelled) return;
 
@@ -110,7 +115,7 @@ export function SpritePortrait({
     void draw();
 
     return () => { cancelled = true; };
-  }, [character, scale, background, officeTheme, themeRevision]);
+  }, [character, scale, background, officeTheme, themeRevision, themeId]);
 
   // A fractional scale can land on a fractional pixel count; the canvas
   // attributes are integers either way, so round once and use the same number

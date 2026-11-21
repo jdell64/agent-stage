@@ -127,6 +127,22 @@ export function squadDefinition(preset: FloorSquadPreset | null | undefined): Fl
   return FLOOR_SQUADS.find((s) => s.id === preset) ?? FLOOR_SQUADS[2];
 }
 
+/** Use a selected theme's cast order for the New Floor preview, keeping the
+ * orchestrator in the first slot. Any missing entries retain their preset art. */
+export function squadPreviewForCast(
+  preset: FloorSquadPreset | null | undefined,
+  castCharacters: readonly string[],
+  orchestratorCharacter?: string
+): FloorSquadMember[] {
+  const orderedCast = orchestratorCharacter && castCharacters.includes(orchestratorCharacter)
+    ? [orchestratorCharacter, ...castCharacters.filter((character) => character !== orchestratorCharacter)]
+    : castCharacters;
+  return squadDefinition(preset).members.map((member, index) => ({
+    ...member,
+    character: orderedCast[index] ?? member.character
+  }));
+}
+
 /** The worker agents a preset hires on top of the orchestrator. */
 export function squadWorkers(preset: FloorSquadPreset | null | undefined): FloorSquadMember[] {
   return squadDefinition(preset).members.filter((m) => !m.orchestrator);
@@ -187,6 +203,8 @@ export interface OpenFloorOptions {
   home?: string | null;
   name?: string | null;
   squad?: FloorSquadPreset | null;
+  /** Theme for this floor only; does not change the application's default theme. */
+  theme?: string | null;
 }
 
 export interface FloorSummary {
@@ -251,6 +269,31 @@ export function normalizeHivePath(
   if (!trimmed) return null;
   const resolved = normalizeSegments(trimmed, platform === 'win32').replace(/[\\/]+$/, '');
   return platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+/** Resolve a persisted floor-scoped theme, rejecting missing or unavailable packs. */
+export function floorThemeForHome(
+  saved: unknown,
+  home: string | null | undefined,
+  availableThemeIds: readonly string[]
+): string | null {
+  const key = normalizeHivePath(home);
+  if (!key || !saved || typeof saved !== 'object' || Array.isArray(saved)) return null;
+  const theme = (saved as Record<string, unknown>)[key];
+  return typeof theme === 'string' && availableThemeIds.includes(theme) ? theme : null;
+}
+
+/** Return an updated workspace-path keyed theme map, preserving other floors. */
+export function rememberFloorTheme(
+  saved: unknown,
+  home: string | null | undefined,
+  theme: string
+): Record<string, string> {
+  const key = normalizeHivePath(home);
+  const existing = saved && typeof saved === 'object' && !Array.isArray(saved)
+    ? Object.fromEntries(Object.entries(saved).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+    : {};
+  return key ? { ...existing, [key]: theme } : existing;
 }
 
 /** Sanitize the saved secondary-floor homes before opening them at app startup. */
