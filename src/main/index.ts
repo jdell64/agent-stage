@@ -10,6 +10,7 @@ import { join, resolve, sep, basename, dirname, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { request as httpsRequest } from 'node:https';
 import { PtyManager, type SpawnOptions } from './pty';
+import { cleanupSecondaryFloorAfterContentsGone, registerSecondaryFloorGoneHandlers } from './floorRuntimeLifecycle';
 import { resolveCommand as resolveCliCommand, isSafeCommandName } from './shellEnv';
 import { initAutoUpdater, abortPendingRestart } from './updater';
 import { RealtimeFloorWatcher } from './realtimeFloorWatcher';
@@ -3084,18 +3085,31 @@ function createFloorView(
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
-  wc.once('destroyed', () => {
-    const current = floorsByWcId.get(wc.id);
-    if (current !== rt) return;
-    stopSecondaryFloorServices(rt);
-    floorsByWcId.delete(wc.id);
-    if (activeFloorWcId === wc.id) {
+  const cleanupAfterContentsGone = (): boolean => cleanupSecondaryFloorAfterContentsGone({
+    isPrimary: rt.isPrimary,
+    isCurrent: () => floorsByWcId.get(wc.id) === rt,
+    detachView: () => {
+      if (rt.view && !rt.win.isDestroyed()) {
+        rt.view.setVisible(false);
+        rt.win.contentView.removeChildView(rt.view);
+      }
+    },
+    killOwnerPtys: () => ptyManager.killByOwner(wc),
+    stopServices: () => stopSecondaryFloorServices(rt),
+    removeRuntime: () => { floorsByWcId.delete(wc.id); },
+    activateFallback: () => {
+      if (activeFloorWcId !== wc.id) return;
       const fallback = [...floorsByWcId.values()].find((candidate) => candidate.isPrimary)
         ?? floorsByWcId.values().next().value;
       if (fallback) activateFloor(fallback);
-    }
-    broadcastFloorsChanged();
+    },
+    broadcast: broadcastFloorsChanged
   });
+  registerSecondaryFloorGoneHandlers(
+    (listener) => wc.once('destroyed', listener),
+    (listener) => wc.once('render-process-gone', listener),
+    cleanupAfterContentsGone
+  );
 
   if (extra.name && rt.home) setFloorAlias(rt.home, extra.name);
   if (rt.home) {
