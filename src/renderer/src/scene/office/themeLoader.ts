@@ -32,12 +32,12 @@ import { setAppTheme } from '@/design/theme';
 import { normalizeCastDisplayName, normalizePronouns } from '@shared/castMetadata';
 
 
-/** Track created object URLs per theme to allow cleanup if needed. */
-const THEME_OBJECT_URLS = new Map<ThemeId, string[]>();
+/** Track created object URLs per loaded theme layout to allow cleanup if needed. */
+const THEME_OBJECT_URLS = new Map<string, string[]>();
 /** One pack can be needed by the floor and a portrait at the same time. Sharing
  * the in-flight load prevents the later caller from revoking the first caller's
  * blob URLs before its images have decoded. */
-const THEME_LOADS = new Map<ThemeId, Promise<ThemeConfig>>();
+const THEME_LOADS = new Map<string, Promise<ThemeConfig>>();
 
 /** Parse a theme's raw Tiled JSON and patch its tileset array.
  *  `embedded` atlases keep the map's own inline metadata; the rest are replaced
@@ -188,14 +188,22 @@ function buildDiskThemeCast(
 /**
  * Transforms a PackPayload into a renderable ThemeConfig with blob: URLs.
  */
-function packPayloadToThemeConfig(payload: PackPayload, id: ThemeId): ThemeConfig | null {
+function packPayloadToThemeConfig(payload: PackPayload, id: ThemeId, requestedLayoutId?: string): ThemeConfig | null {
   const validation = validatePack({ dirName: id, files: payload.files });
   if (!validation.pack) {
     console.warn(`[themeLoader] pack '${id}' failed validation:`, validation.issues);
     return null;
   }
 
-  const { manifest, mapRaw, tilesets: validatedTilesets, tokensCss } = validation.pack;
+  const { floorLayouts } = validation.pack;
+  const layout = requestedLayoutId
+    ? floorLayouts.find((candidate) => candidate.id === requestedLayoutId)
+    : floorLayouts.find((candidate) => !candidate.catchAll) ?? floorLayouts[0];
+  const manifest = layout?.manifest ?? validation.pack.manifest;
+  const mapRaw = layout?.mapRaw ?? validation.pack.mapRaw;
+  const validatedTilesets = layout?.tilesets ?? validation.pack.tilesets;
+  const tokensCss = validation.pack.tokensCss;
+  const cacheKey = requestedLayoutId ? `${id}::${layout?.id ?? requestedLayoutId}` : id;
   const urls: string[] = [];
 
   const tilesets: TilesetEntry[] = [];
@@ -258,14 +266,17 @@ function packPayloadToThemeConfig(payload: PackPayload, id: ThemeId): ThemeConfi
       : undefined;
 
   // Revoke any previous blob URLs for this theme ID before assigning new ones
-  const prevUrls = THEME_OBJECT_URLS.get(id);
+  const prevUrls = THEME_OBJECT_URLS.get(cacheKey);
   if (prevUrls) {
     for (const u of prevUrls) URL.revokeObjectURL(u);
   }
-  THEME_OBJECT_URLS.set(id, urls);
+  THEME_OBJECT_URLS.set(cacheKey, urls);
 
   const themeConfig: ThemeConfig = {
     id,
+    layoutId: layout?.id ?? 'default',
+    layoutName: layout?.name ?? manifest.name,
+    layoutCatchAll: layout?.catchAll ?? true,
     mapRaw,
     tilesets,
     primarySeatNames: [...manifest.seats.primary],
@@ -363,12 +374,13 @@ export function applyThemeChrome(theme: ThemeConfig): void {
 export function invalidateThemeCache(id?: ThemeId): void {
   if (id !== undefined) {
     const normId = normalizeThemeId(id);
-    THEMES.delete(normId);
-    THEME_LOADS.delete(normId);
-    const urls = THEME_OBJECT_URLS.get(normId);
-    if (urls) {
+    const prefix = `${normId}::`;
+    for (const key of THEMES.keys()) if (key === normId || key.startsWith(prefix)) THEMES.delete(key);
+    for (const key of THEME_LOADS.keys()) if (key === normId || key.startsWith(prefix)) THEME_LOADS.delete(key);
+    for (const [key, urls] of THEME_OBJECT_URLS) {
+      if (key !== normId && !key.startsWith(prefix)) continue;
       for (const u of urls) URL.revokeObjectURL(u);
-      THEME_OBJECT_URLS.delete(normId);
+      THEME_OBJECT_URLS.delete(key);
     }
     return;
   }
@@ -383,39 +395,41 @@ export function invalidateThemeCache(id?: ThemeId): void {
 /** Resolve a theme id to a renderable ThemeConfig. Async by design;
  *  loads disk pack via window.cth.loadThemePack(id) and caches in THEMES.
  *  Falls back to DEFAULT_THEME_ID ('plain') on any failure. */
-export async function loadTheme(id: ThemeId): Promise<ThemeConfig> {
+export async function loadTheme(id: ThemeId, layoutId?: string): Promise<ThemeConfig> {
   const normId = normalizeThemeId(id);
+  const cacheKey = layoutId ? `${normId}::${layoutId}` : normId;
 
   // Return cached theme if already loaded and renderable
-  const cached = getTheme(normId);
+  const cached = THEMES.get(cacheKey);
   if (cached && isThemeRenderable(cached)) {
     return cached;
   }
 
-  const inFlight = THEME_LOADS.get(normId);
+  const inFlight = THEME_LOADS.get(cacheKey);
   if (inFlight) return inFlight;
 
-  const load = loadThemeUncached(id, normId);
-  THEME_LOADS.set(normId, load);
+  const load = loadThemeUncached(id, normId, layoutId, cacheKey);
+  THEME_LOADS.set(cacheKey, load);
   try {
     return await load;
   } finally {
-    THEME_LOADS.delete(normId);
+    THEME_LOADS.delete(cacheKey);
   }
 }
 
 /** Load one uncached theme bundle. Call through `loadTheme` so concurrent
  * consumers share this operation rather than revoking each other's blobs. */
-async function loadThemeUncached(id: ThemeId, normId: ThemeId): Promise<ThemeConfig> {
+async function loadThemeUncached(id: ThemeId, normId: ThemeId, layoutId: string | undefined, cacheKey: string): Promise<ThemeConfig> {
 
   // Attempt to load from disk
   if (typeof window !== 'undefined' && window.cth?.loadThemePack) {
     try {
       const payload = await window.cth.loadThemePack(normId);
       if (payload) {
-        const theme = packPayloadToThemeConfig(payload, normId);
+        const theme = packPayloadToThemeConfig(payload, normId, layoutId);
         if (theme && isThemeRenderable(theme)) {
-          THEMES.set(normId, theme);
+          THEMES.set(cacheKey, theme);
+          if (!layoutId) THEMES.set(normId, theme);
           return theme;
         }
       }

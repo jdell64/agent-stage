@@ -133,12 +133,12 @@ export function readPackFromDisk(dir: string, source: 'builtin' | 'user' | 'dev'
             });
             continue;
           }
-          if (rel === 'map.tmj' && st.size > PACK_LIMITS.mapBytes) {
+          if (rel.toLowerCase().endsWith('.tmj') && st.size > PACK_LIMITS.mapBytes) {
             issues.push({
               level: 'error',
               code: 'map-too-large',
               path: rel,
-              message: `map.tmj exceeds size limit (${st.size} > ${PACK_LIMITS.mapBytes})`
+              message: `${rel} exceeds size limit (${st.size} > ${PACK_LIMITS.mapBytes})`
             });
             continue;
           }
@@ -302,6 +302,7 @@ export function scanThemes(force = false): ScanResult {
       let version = '0.0.0';
       let blurb: string | undefined;
       let swatch: string | undefined;
+      let floorLayouts: PackSummary['floorLayouts'];
 
       if (!existsSync(themeJsonPath)) {
         issues.push({
@@ -322,6 +323,15 @@ export function scanThemes(force = false): ScanResult {
               if (typeof raw.version === 'string') version = raw.version;
               if (typeof raw.blurb === 'string') blurb = raw.blurb;
               if (typeof raw.swatch === 'string') swatch = raw.swatch;
+              if (Array.isArray(raw.floorLayouts)) {
+                floorLayouts = raw.floorLayouts.flatMap((layout: unknown) => {
+                  if (!layout || typeof layout !== 'object' || Array.isArray(layout)) return [];
+                  const value = layout as Record<string, unknown>;
+                  return typeof value.id === 'string' && typeof value.name === 'string'
+                    ? [{ id: value.id, name: value.name, ...(value.catchAll === true ? { catchAll: true } : {}) }]
+                    : [];
+                });
+              }
             }
             issues.push(...readPackFromDisk(packDir, source, sub).issues);
           }
@@ -344,7 +354,8 @@ export function scanThemes(force = false): ScanResult {
         swatch,
         source,
         available,
-        issues
+        issues,
+        floorLayouts
       });
     }
   }

@@ -192,6 +192,7 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
   // The active office theme (store mirror of config.officeTheme). Changing it
   // tears down and rebuilds the whole scene on the new map/cast (see deps below).
   const officeTheme = useStore((s) => s.officeTheme);
+  const floorLayout = new URLSearchParams(window.location.search).get('floorLayout') ?? undefined;
   const themeRevision = useStore((s) => s.themeRevision);
 
   // Is the floor actually on screen? A fullscreen terminal or file editor covers
@@ -255,7 +256,7 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
 
     const init = async () => {
       // Load the active theme bundle (falls back to 'office' on a bad/absent bundle).
-      const theme = await loadTheme(officeTheme);
+      const theme = await loadTheme(officeTheme, floorLayout);
       const idleZoneAllocator = new IdleZoneAllocator(theme.idleZones ?? []);
       // Chrome (tokens.css + fonts) restyles the whole page, not just the scene,
       // so it's applied on ACTIVATION here rather than inside the cached
@@ -1870,7 +1871,7 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
       appRef.current = null;
       while (host.firstChild) host.removeChild(host.firstChild);
     };
-  }, [officeTheme, themeRevision, glGeneration, i18n.language]);
+  }, [officeTheme, floorLayout, themeRevision, glGeneration, i18n.language]);
 
   return (
     <div

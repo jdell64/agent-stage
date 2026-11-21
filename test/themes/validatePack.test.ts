@@ -125,6 +125,32 @@ describe('validatePack: happy path', () => {
     expect(codes(r, 'warn')).toContain('bad-idle-zone');
     expect(r.pack!.manifest.idleZones).toEqual([{ x: 3, y: 3 }]);
   });
+  it('validates ordered layout maps and carries layout-specific idle zones', () => {
+    const manifest = baseManifest({ floorLayouts: [
+      { id: 'bridge', name: 'Bridge', map: 'layouts/bridge.tmj', idleZones: [{ x: 2, y: 2 }] },
+      { id: 'ten-forward', name: 'Ten Forward', map: 'layouts/ten-forward.tmj', idleZones: [{ x: 4, y: 4 }] },
+    ] });
+    const r = validatePack(pack(manifest, baseMap(), {
+      'layouts/bridge.tmj': enc(JSON.stringify(baseMap())),
+      'layouts/ten-forward.tmj': enc(JSON.stringify(baseMap())),
+    }));
+
+    expect(codes(r, 'error')).toEqual([]);
+    expect(r.pack!.floorLayouts.map((layout) => layout.id)).toEqual(['bridge', 'ten-forward']);
+    expect(r.pack!.floorLayouts.map((layout) => layout.catchAll)).toEqual([false, true]);
+    expect(r.pack!.floorLayouts[0].manifest.idleZones).toEqual([{ x: 2, y: 2 }]);
+    expect(r.pack!.floorLayouts[1].manifest.map).toBe('layouts/ten-forward.tmj');
+  });
+  it('rejects unsafe, missing, duplicate and multiply-catch-all layouts', () => {
+    const layouts = [
+      { id: 'bridge', name: 'Bridge', map: '../bridge.tmj', catchAll: true },
+      { id: 'bridge', name: 'Duplicate', map: 'layouts/bridge.tmj', catchAll: true },
+    ];
+    const r = validatePack(pack(baseManifest({ floorLayouts: layouts as any })));
+    expect(codes(r, 'error')).toEqual(expect.arrayContaining([
+      'bad-floor-layout-map', 'duplicate-floor-layout-id', 'multiple-catch-all-layouts',
+    ]));
+  });
 });
 
 describe('validatePack: errors reject the pack whole', () => {

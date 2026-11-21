@@ -207,6 +207,79 @@ export interface OpenFloorOptions {
   theme?: string | null;
 }
 
+export interface FloorLayoutDefinition {
+  id: string;
+  catchAll?: boolean;
+}
+
+export interface SavedFloorLayout {
+  theme: string;
+  layout: string;
+}
+
+/** Choose the next declared layout that is not already assigned. An explicit
+ *  catch-all is reserved for overflow; otherwise the last layout is used for
+ *  overflow after it has had its sequential turn. */
+export function nextFloorLayout(
+  definitions: readonly FloorLayoutDefinition[] | null | undefined,
+  usedLayoutIds: readonly string[]
+): string {
+  const layouts = definitions?.filter((layout) => typeof layout.id === 'string' && layout.id.length > 0) ?? [];
+  if (layouts.length === 0) return 'default';
+  const explicitCatchAll = layouts.find((layout) => layout.catchAll === true);
+  const catchAll = explicitCatchAll ?? layouts[layouts.length - 1];
+  const sequential = explicitCatchAll ? layouts.filter((layout) => layout !== explicitCatchAll) : layouts;
+  const used = new Set(usedLayoutIds);
+  return sequential.find((layout) => !used.has(layout.id))?.id ?? catchAll.id;
+}
+
+/** Keep a floor's chosen layout stable across restarts while allowing a removed
+ *  layout to fall back to the theme's default layout. */
+export function floorLayoutForHome(
+  saved: unknown,
+  home: string | null | undefined,
+  theme: string,
+  definitions: readonly FloorLayoutDefinition[] | null | undefined
+): string | null {
+  const key = normalizeHivePath(home);
+  if (!key || !saved || typeof saved !== 'object' || Array.isArray(saved)) return null;
+  const entry = (saved as Record<string, unknown>)[key];
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+  const assignment = entry as Record<string, unknown>;
+  if (assignment.theme !== theme || typeof assignment.layout !== 'string') return null;
+  const layouts = definitions?.filter((layout) => typeof layout.id === 'string' && layout.id.length > 0) ?? [];
+  if (layouts.some((layout) => layout.id === assignment.layout)) return assignment.layout;
+  // The user's saved room has been removed from the current theme pack. Keep
+  // this floor opening and land it in that pack's default room.
+  return layouts.find((layout) => layout.catchAll !== true)?.id ?? layouts[0]?.id ?? 'default';
+}
+
+export function rememberFloorLayout(
+  saved: unknown,
+  home: string | null | undefined,
+  theme: string,
+  layout: string
+): Record<string, SavedFloorLayout> {
+  const key = normalizeHivePath(home);
+  const current = saved && typeof saved === 'object' && !Array.isArray(saved)
+    ? saved as Record<string, unknown>
+    : {};
+  if (!key) return current as Record<string, SavedFloorLayout>;
+  const next: Record<string, SavedFloorLayout> = {};
+  for (const [savedKey, value] of Object.entries(current)) {
+    if (value && typeof value === 'object' && !Array.isArray(value) &&
+        typeof (value as Record<string, unknown>).theme === 'string' &&
+        typeof (value as Record<string, unknown>).layout === 'string') {
+      next[savedKey] = {
+        theme: (value as Record<string, string>).theme,
+        layout: (value as Record<string, string>).layout,
+      };
+    }
+  }
+  next[key] = { theme, layout };
+  return next;
+}
+
 export interface FloorSummary {
   floorNumber: number;
   webContentsId: number;
@@ -216,6 +289,8 @@ export interface FloorSummary {
   name?: string | null;
   /** Alias, else folder name, else "Floor N" — what the UI shows as the floor title. */
   displayName?: string;
+  /** User-facing named theme room rendered on this floor, when available. */
+  layoutName?: string | null;
   /** Headline of what the floor is doing right now (first working agent's action). */
   activity?: string | null;
   /** Short 1-2 word tag for the Discord-style left rail tile (e.g. "CLIENT", "SIDE/APP"). */

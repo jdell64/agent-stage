@@ -112,6 +112,8 @@ import {
   extractFolderName,
   findFloorByHome,
   floorThemeForHome,
+  floorLayoutForHome,
+  nextFloorLayout,
   floorOrderKey,
   floorDisplayName,
   formatFloorWindowTitle,
@@ -121,6 +123,7 @@ import {
   orderFloorSummaries,
   restorableFloorHomes,
   rememberFloorTheme,
+  rememberFloorLayout,
   sanitizeFloorName,
   shortenHomePath,
   takePendingFloorSquad,
@@ -128,6 +131,7 @@ import {
   type FloorFolderStatus,
   type FloorSquadPreset,
   type FloorSummary,
+  type FloorLayoutDefinition,
   type FloorsSnapshot,
   type NewFloorInfo
 } from '../shared/floors';
@@ -476,6 +480,8 @@ interface FloorRuntime {
   wcId: number;
   isPrimary: boolean;
   home: string | null;
+  themeId: string;
+  layoutId: string;
   hive: HiveManager;
   roster: RosterStore;
   control: ControlRegistry;
@@ -607,6 +613,8 @@ function createSecondaryFloorRuntime(
     wcId,
     isPrimary: false,
     home: initialHome ? resolve(expandTilde(initialHome)) : null,
+    themeId: DEFAULT_THEME_ID,
+    layoutId: 'default',
     hive: floorHive,
     roster: floorRoster,
     control: floorControl,
@@ -727,6 +735,48 @@ function savedFloorTheme(home: string | null | undefined): string | null {
   } catch { return null; }
 }
 
+function floorLayoutsForTheme(themeId: string): FloorLayoutDefinition[] {
+  const summary = scanThemes().packs.find((pack) => pack.id === themeId && pack.available);
+  return summary?.floorLayouts?.length ? summary.floorLayouts : [{ id: 'default', catchAll: true }];
+}
+
+function floorLayoutName(themeId: string, layoutId: string): string | null {
+  const summary = scanThemes().packs.find((pack) => pack.id === themeId && pack.available);
+  return summary?.floorLayouts?.find((layout) => layout.id === layoutId)?.name ?? null;
+}
+
+function defaultFloorLayoutId(themeId: string): string {
+  const layouts = floorLayoutsForTheme(themeId);
+  const explicitCatchAll = layouts.find((layout) => layout.catchAll === true);
+  return (explicitCatchAll ? layouts.find((layout) => layout !== explicitCatchAll) : layouts[0])?.id
+    ?? layouts[0]?.id ?? 'default';
+}
+
+function savedFloorLayout(home: string | null | undefined, themeId: string): string | null {
+  try {
+    return floorLayoutForHome(persist.getKv<unknown>('floors.layouts'), home, themeId, floorLayoutsForTheme(themeId));
+  } catch { return null; }
+}
+
+function saveFloorLayout(home: string | null | undefined, themeId: string, layoutId: string): void {
+  if (!normalizeHivePath(home)) return;
+  try {
+    persist.setKv('floors.layouts', rememberFloorLayout(persist.getKv<unknown>('floors.layouts'), home, themeId, layoutId));
+  } catch { /* preference persistence must not prevent opening a floor */ }
+}
+
+function chooseFloorLayout(themeId: string, home: string | null | undefined, requestedLayoutId?: string | null): string {
+  const layouts = floorLayoutsForTheme(themeId);
+  const ids = new Set(layouts.map((layout) => layout.id));
+  if (requestedLayoutId) return ids.has(requestedLayoutId) ? requestedLayoutId : defaultFloorLayoutId(themeId);
+  const saved = savedFloorLayout(home, themeId);
+  if (saved) return saved;
+  const used = [...floorsByWcId.values()]
+    .filter((runtime) => runtime.themeId === themeId)
+    .map((runtime) => runtime.layoutId);
+  return nextFloorLayout(layouts, used);
+}
+
 function saveFloorTheme(home: string | null | undefined, theme: string): void {
   if (!normalizeHivePath(home)) return;
   try {
@@ -778,6 +828,7 @@ function summarizeFloor(rt: FloorRuntime): FloorSummary {
     folderName: extractFolderName(home),
     name: floorAliasFor(home),
     displayName: floorDisplayName(floorAliasFor(home), home, rt.floorNumber),
+    layoutName: floorLayoutName(rt.themeId, rt.layoutId),
     activity: floorActivity(agents),
     shortTag: floorAliasFor(home)?.slice(0, 8).trim().toUpperCase() ?? deriveFloorShortTag(home, rt.floorNumber),
     displayPath: shortenHomePath(home, homedir()),
@@ -2977,6 +3028,9 @@ function createWindow(): BrowserWindow {
   // reference stays valid as the per-PTY ownership key.
   const wc = win.webContents;
   const wcId = wc.id;
+  const primaryHome = process.env.MD_HIVE_ROOT || readConfig().harnessHome || null;
+  const primaryThemeId = availableFloorTheme(readConfig().officeTheme) ?? DEFAULT_THEME_ID;
+  const primaryLayoutId = defaultFloorLayoutId(primaryThemeId);
 
   // Chromium's default context menu is disabled by the custom application menu,
   // so provide the editing and spellcheck actions at the actual right-click
@@ -3017,7 +3071,9 @@ function createWindow(): BrowserWindow {
     view: null,
     wcId,
     isPrimary: true,
-    home: process.env.MD_HIVE_ROOT || readConfig().harnessHome || null,
+    home: primaryHome,
+    themeId: primaryThemeId,
+    layoutId: primaryLayoutId,
     hive,
     roster,
     control,
@@ -3154,7 +3210,7 @@ function createWindow(): BrowserWindow {
 /** Add an isolated renderer for a floor inside the one host BrowserWindow. */
 function createFloorView(
   initialHome: string | null,
-  extra: { name?: string | null; squad?: FloorSquadPreset | null; theme?: string | null } = {}
+  extra: { name?: string | null; squad?: FloorSquadPreset | null; theme?: string | null; layoutId?: string | null } = {}
 ): FloorRuntime | null {
   const host = mainWindow;
   if (!host || host.isDestroyed()) return null;
@@ -3162,6 +3218,7 @@ function createFloorView(
   const chosenTheme = availableFloorTheme(extra.theme);
   const floorTheme = chosenTheme ?? savedFloorTheme(initialHome)
     ?? availableFloorTheme(readConfig().officeTheme) ?? DEFAULT_THEME_ID;
+  const floorLayoutId = chooseFloorLayout(floorTheme, initialHome, extra.layoutId);
   const view = new WebContentsView({
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -3174,6 +3231,8 @@ function createFloorView(
   });
   const wc = view.webContents;
   const rt = createSecondaryFloorRuntime(host, wc, view, floorNumber, initialHome, extra.squad ?? null);
+  rt.themeId = floorTheme;
+  rt.layoutId = floorLayoutId;
   floorsByWcId.set(wc.id, rt);
   wc.on('focus', () => {
     if (floorsByWcId.get(wc.id) === rt) {
@@ -3231,17 +3290,18 @@ function createFloorView(
 
   if (extra.name && rt.home) setFloorAlias(rt.home, extra.name);
   if (chosenTheme && rt.home) saveFloorTheme(rt.home, chosenTheme);
+  if (rt.home) saveFloorLayout(rt.home, floorTheme, floorLayoutId);
   if (rt.home) {
     ensureHarnessHome(rt.home);
     bootstrapSecondaryFloorServices(rt);
   }
   persistOpenFloors();
-  const query = new URLSearchParams({ floor: String(floorNumber), floorTheme }).toString();
+  const query = new URLSearchParams({ floor: String(floorNumber), floorTheme, floorLayout: floorLayoutId }).toString();
   if (isDev && process.env.ELECTRON_RENDERER_URL) {
     const url = process.env.ELECTRON_RENDERER_URL;
     void wc.loadURL(`${url}${url.includes('?') ? '&' : '?'}${query}`);
   } else {
-    void wc.loadFile(join(__dirname, '../renderer/index.html'), { query: { floor: String(floorNumber), floorTheme } });
+    void wc.loadFile(join(__dirname, '../renderer/index.html'), { query: { floor: String(floorNumber), floorTheme, floorLayout: floorLayoutId } });
   }
   activateFloor(rt);
   broadcastFloorsChanged();
@@ -3284,7 +3344,7 @@ function closeFloorView(rt: FloorRuntime): boolean {
 /** Open a new floor view — gated by the multiWindow flag. Returns its runtime,
  *  or null when the feature is off (the entry points are hidden in that case,
  *  but the IPC stays defensive). */
-function openFloor(initialHome?: string | null, extra: { name?: string | null; squad?: FloorSquadPreset | null; theme?: string | null } = {}): FloorRuntime | null {
+function openFloor(initialHome?: string | null, extra: { name?: string | null; squad?: FloorSquadPreset | null; theme?: string | null; layoutId?: string | null } = {}): FloorRuntime | null {
   if (!readConfig().multiWindow) return null;
   if (initialHome) {
     const resolved = resolve(expandTilde(initialHome));
@@ -3297,7 +3357,7 @@ function openFloor(initialHome?: string | null, extra: { name?: string | null; s
       }
     }
   }
-  return createFloorView(initialHome ?? null, { name: extra.name ?? null, squad: extra.squad ?? null, theme: extra.theme ?? null });
+  return createFloorView(initialHome ?? null, { name: extra.name ?? null, squad: extra.squad ?? null, theme: extra.theme ?? null, layoutId: extra.layoutId ?? null });
 }
 
 /** Reopen the user's secondary workspace floors after the primary window exists. */
@@ -3313,7 +3373,11 @@ function restoreOpenFloors(): void {
         const resolved = resolve(expandTilde(home));
         if (!existsSync(resolved) || !statSync(resolved).isDirectory()) continue;
         // A restored floor resumes its existing workspace; it must not hire a fresh squad.
-        openFloor(resolved, { name: floorAliasFor(resolved), squad: 'empty', theme: savedFloorTheme(resolved) });
+        const theme = savedFloorTheme(resolved);
+        openFloor(resolved, {
+          name: floorAliasFor(resolved), squad: 'empty', theme,
+          layoutId: theme ? savedFloorLayout(resolved, theme) : null,
+        });
       } catch (error) {
         console.warn(`[floors] Could not restore ${home}:`, error);
       }
@@ -4138,6 +4202,14 @@ ipcMain.handle('config:update', (_evt, patch: Partial<HarnessConfig>) => {
   if (typeof patch?.officeTheme === 'string' || typeof patch?.themesDir === 'string') {
     setThemeOrchestratorName(readThemeOrchestratorName(readConfig().officeTheme));
   }
+  if (typeof patch?.officeTheme === 'string' || typeof patch?.themesDir === 'string') {
+    const primary = [...floorsByWcId.values()].find((runtime) => runtime.isPrimary);
+    const themeId = availableFloorTheme(readConfig().officeTheme) ?? DEFAULT_THEME_ID;
+    if (primary) {
+      primary.themeId = themeId;
+      primary.layoutId = defaultFloorLayoutId(themeId);
+    }
+  }
   if (typeof patch?.orchestratorMaySpawn === 'boolean') hive.setOrchestratorMaySpawn(patch.orchestratorMaySpawn);
   if (!hiveWasEnabled && hive.enabled()) {
     console.log('[hive] harnessHome configured — bootstrapping hive services');
@@ -4218,6 +4290,8 @@ ipcMain.handle('config:changeHome', async (evt, payload: unknown) => {
       }
     }
     callerFloor.home = newHome;
+    saveFloorTheme(newHome, callerFloor.themeId);
+    saveFloorLayout(newHome, callerFloor.themeId, callerFloor.layoutId);
     callerFloor.reportedAgents = [];
     const { recentHives } = normalizeHiveHome(newHome, readConfig().recentHives ?? []);
     writeConfig({ recentHives });
@@ -4277,6 +4351,8 @@ ipcMain.handle('config:changeHome', async (evt, payload: unknown) => {
   if (floorsByWcId.size > 1 && callerFloor) {
     writeConfig({ harnessHome: newHome });
     callerFloor.home = newHome;
+    saveFloorTheme(newHome, callerFloor.themeId);
+    saveFloorLayout(newHome, callerFloor.themeId, callerFloor.layoutId);
     callerFloor.reportedAgents = [];
     try { ptyManager.killByOwner(callerFloor.webContents); } catch { /* best-effort */ }
     bootstrapHiveServices();

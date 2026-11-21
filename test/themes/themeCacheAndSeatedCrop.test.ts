@@ -23,6 +23,9 @@ describe('invalidateThemeCache', () => {
   it('evicts a specific theme or clears the entire runtime theme registry', () => {
     const fakeTheme = (id: string): ThemeConfig => ({
       id,
+      layoutId: 'default',
+      layoutName: 'Default',
+      layoutCatchAll: true,
       mapRaw: '{}',
       tilesets: [],
       primarySeatNames: [],

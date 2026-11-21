@@ -3,6 +3,9 @@ import {
   normalizeHivePath,
   floorThemeForHome,
   rememberFloorTheme,
+  floorLayoutForHome,
+  rememberFloorLayout,
+  nextFloorLayout,
   squadPreviewForCast,
   findFloorByHome,
   nextFloorNumber,
@@ -40,6 +43,30 @@ describe('src/shared/floors', () => {
       expect(floorThemeForHome(both, 'c:\\work\\alpha\\', ['munder-difflin', 'plain'])).toBe('munder-difflin');
       expect(floorThemeForHome(both, 'C:\\Work\\Beta', ['munder-difflin', 'plain'])).toBe('plain');
       expect(floorThemeForHome(both, 'C:\\Work\\Alpha', ['plain'])).toBeNull();
+    });
+
+    it('assigns layouts in order, then repeats the catch-all', () => {
+      const layouts = [{ id: 'bridge' }, { id: 'ten-forward' }, { id: 'engineering' }];
+      expect(nextFloorLayout(layouts, [])).toBe('bridge');
+      expect(nextFloorLayout(layouts, ['bridge'])).toBe('ten-forward');
+      expect(nextFloorLayout(layouts, ['bridge', 'ten-forward'])).toBe('engineering');
+      expect(nextFloorLayout(layouts, ['bridge', 'ten-forward', 'engineering'])).toBe('engineering');
+    });
+
+    it('reserves an explicit catch-all until sequential layouts are used', () => {
+      const layouts = [{ id: 'default', catchAll: true }, { id: 'bridge' }, { id: 'engineering' }];
+      expect(nextFloorLayout(layouts, [])).toBe('bridge');
+      expect(nextFloorLayout(layouts, ['bridge'])).toBe('engineering');
+      expect(nextFloorLayout(layouts, ['bridge', 'engineering'])).toBe('default');
+    });
+
+    it('persists a floor layout by theme and falls back when that layout is removed', () => {
+      const saved = rememberFloorLayout({}, 'C:\\Work\\Alpha', 'tng', 'ten-forward');
+      const layouts = [{ id: 'bridge' }, { id: 'ten-forward' }];
+
+      expect(floorLayoutForHome(saved, 'c:\\work\\alpha\\', 'tng', layouts)).toBe('ten-forward');
+      expect(floorLayoutForHome(saved, 'C:\\Work\\Alpha', 'plain', layouts)).toBeNull();
+      expect(floorLayoutForHome(saved, 'C:\\Work\\Alpha', 'tng', [{ id: 'bridge' }])).toBe('bridge');
     });
   });
 
