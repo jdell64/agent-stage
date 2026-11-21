@@ -454,6 +454,7 @@ export class HiveManager {
 
   private routerTimer: NodeJS.Timeout | null = null;
   private interruptHandler: ((agentId: string) => HiveInterruptResult) | null = null;
+  private unregisteredOutboxesLogged = new Set<string>();
 
   /** The embedded OTLP collector's loopback URL, set by the main process once the
    *  collector is bound (telemetry.ts). null = telemetry off → no OTel env is
@@ -2310,13 +2311,43 @@ export class HiveManager {
     if (!root) return 0;
     const agentsDir = join(root, 'agents');
     if (!existsSync(agentsDir)) return 0;
+    const registeredAgents = new Set(Object.keys(this.registry().agents ?? {}));
     let routed = 0;
     for (const id of readdirSync(agentsDir)) {
       const outbox = join(agentsDir, id, 'outbox');
       if (!existsSync(outbox)) continue;
+      if (!registeredAgents.has(id)) {
+        if (!this.unregisteredOutboxesLogged.has(id)) {
+          this.unregisteredOutboxesLogged.add(id);
+          this.appendLog({ kind: 'drop', reason: 'unregistered-outbox', from: id });
+        }
+        continue;
+      }
       for (const f of readdirSync(outbox)) {
         if (!f.endsWith('.json')) continue;
         const full = join(outbox, f);
+        const archive = (archiveName: string) => {
+          const sent = join(outbox, '.sent');
+          try {
+            mkdirSync(sent, { recursive: true });
+            renameSync(full, join(sent, archiveName));
+            return;
+          } catch { /* recover below; a failed archive must never be re-routed */ }
+
+          const quarantine = join(agentsDir, '.outbox-quarantine', id);
+          const uniqueName = `${archiveName}.${Date.now()}.${randomBytes(4).toString('hex')}`;
+          try {
+            mkdirSync(quarantine, { recursive: true });
+            renameSync(full, join(quarantine, uniqueName));
+            this.appendLog({ kind: 'outbox-quarantined', from: id, file: f });
+            return;
+          } catch { /* last resort below */ }
+
+          try {
+            unlinkSync(full);
+            this.appendLog({ kind: 'drop', reason: 'outbox-archive-failed', from: id, file: f });
+          } catch { /* the source may already have disappeared */ }
+        };
         try {
           const raw = readFileSync(full, 'utf8');
           let partial: Partial<HiveMessage>;
@@ -2328,7 +2359,7 @@ export class HiveManager {
               const detail = error instanceof Error ? error.message : String(error);
               this.appendLog({ kind: 'drop', reason: 'malformed-json', from: id, file: f });
               this.reportMalformedOutbox(id, f, detail);
-              try { renameSync(full, join(outbox, '.sent', `bad-${f}`)); } catch { /* noop */ }
+              archive(`bad-${f}`);
               continue;
             }
             try {
@@ -2337,7 +2368,7 @@ export class HiveManager {
               const detail = repairError instanceof Error ? repairError.message : String(repairError);
               this.appendLog({ kind: 'drop', reason: 'malformed-json', from: id, file: f });
               this.reportMalformedOutbox(id, f, detail);
-              try { renameSync(full, join(outbox, '.sent', `bad-${f}`)); } catch { /* noop */ }
+              archive(`bad-${f}`);
               continue;
             }
             this.appendLog({
@@ -2350,11 +2381,11 @@ export class HiveManager {
           const msg = this.normalize(partial, id);
           msg.from = id; // sender is authoritative — the owning directory
           this.routeMessage(msg);
-          renameSync(full, join(outbox, '.sent', f)); // archive, don't reprocess
+          archive(f);
           routed++;
         } catch {
           // malformed file — quarantine so we don't spin on it
-          try { renameSync(full, join(outbox, '.sent', `bad-${f}`)); } catch { /* noop */ }
+          archive(`bad-${f}`);
         }
       }
     }

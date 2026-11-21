@@ -137,3 +137,33 @@ test('an irreparable poison file does not block a valid file in the same pass', 
   assert.equal(fs.existsSync(path.join(outbox, '.sent', 'b-good.json')), true);
   assert.equal(eventsFor(hive, 'a-poison.json')[0].reason, 'malformed-json');
 });
+
+test('outboxes without a registry entry are ignored and logged once', async (t) => {
+  const { hive } = await floor(t);
+  const outbox = path.join(hive.root(), 'agents', 'removed-agent', 'outbox');
+  fs.mkdirSync(outbox, { recursive: true });
+  fs.writeFileSync(path.join(outbox, 'phantom.json'), JSON.stringify({ to: 'orchestrator', body: 'not registered' }));
+
+  assert.equal(hive.routeOnce(), 0);
+  assert.equal(hive.routeOnce(), 0);
+  assert.equal(fs.existsSync(path.join(outbox, 'phantom.json')), true);
+  assert.equal(hive.logTail(100).filter((entry) => entry.reason === 'unregistered-outbox' && entry.from === 'removed-agent').length, 1);
+  assert.equal(hive.inbox('orchestrator-1').length, 0);
+});
+
+test('delivered messages are quarantined when the .sent archive cannot be created', async (t) => {
+  const { hive, outbox } = await floor(t);
+  fs.rmSync(path.join(outbox, '.sent'), { recursive: true, force: true });
+  fs.writeFileSync(path.join(outbox, '.sent'), 'block archive directory creation');
+  writeOutbox(outbox, 'delivered.json', JSON.stringify({ to: 'orchestrator', act: 'inform', body: 'delivered once' }));
+
+  assert.equal(hive.routeOnce(), 1);
+  assert.equal(hive.inbox('orchestrator-1')[0].body, 'delivered once');
+  const quarantine = path.join(hive.root(), 'agents', '.outbox-quarantine', 'worker-1');
+  assert.equal(fs.readdirSync(quarantine).some((name) => name.startsWith('delivered.json.')), true);
+  assert.equal(fs.existsSync(path.join(outbox, 'delivered.json')), false);
+  assert.equal(hive.routeOnce(), 0);
+  assert.equal(hive.inbox('orchestrator-1').filter((message) => message.body === 'delivered once').length, 1);
+  assert.equal(hive.logTail(100).filter((entry) => entry.kind === 'outbox-quarantined' && entry.file === 'delivered.json').length, 1);
+  assert.equal(hive.logTail(100).some((entry) => entry.reason === 'unregistered-outbox' && entry.from === '.outbox-quarantine'), false);
+});
