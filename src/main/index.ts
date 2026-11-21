@@ -292,6 +292,7 @@ const hive = new HiveManager(
     try { wc.send(channel, payload); return true; } catch { return false; }
   }
 );
+hive.setInterruptHandler((agentId) => executeAgentInterrupt(agentId, hive, ptyToAgent, primaryWebContents()));
 let hiveInstanceLock: HiveInstanceLock | null = null;
 // LOG-STALL-AV: the app keeps log.jsonl / cost-ledger.jsonl open (closed on reset, change-home, quit).
 hive.keepAppendFilesOpen(true);
@@ -5353,18 +5354,19 @@ ipcMain.handle('control:halt', (evt, agentId: unknown) => {
   activeControl.halt(agentId);
   return activeControl.snapshot(agentId);
 });
-ipcMain.handle('control:interrupt', (evt, agentId: unknown) => {
-  if (typeof agentId !== 'string' || !agentId.trim()) return { ok: false, error: 'invalid agent id' };
-  const fl = floorForWebContents(evt.sender);
-  const map = fl?.ptyToAgent ?? ptyToAgent;
+function executeAgentInterrupt(
+  agentId: string,
+  activeHive: HiveManager,
+  map: Map<string, string>,
+  owner: Electron.WebContents | null
+): { ok: boolean; error?: string } {
   const ptyId = [...map.entries()].find(([, id]) => id === agentId)?.[0];
   if (!ptyId) return { ok: false, error: `no live pty for agent: ${agentId}` };
   const now = Date.now();
   if (!claimInterrupt(agentId, now, interruptLastAt, INTERRUPT_DEBOUNCE_MS)) {
     return { ok: false, error: 'interrupt already requested; please wait' };
   }
-  const owner = fl?.win?.webContents ?? BrowserWindow.fromWebContents(evt.sender)?.webContents ?? null;
-  const meta = (fl?.hive ?? hive).registry().agents[agentId];
+  const meta = activeHive.registry().agents[agentId];
   const provider = inferAgentProvider(meta?.command ?? '', meta?.provider);
   // Claude Code uses Esc to stop the current turn without clearing its prompt;
   // Codex and unknown interactive engines use one Ctrl+C. Never send twice.
@@ -5373,7 +5375,7 @@ ipcMain.handle('control:interrupt', (evt, agentId: unknown) => {
   if (result.ok) {
     // A routed audit message makes every emergency use durable in log.jsonl and
     // visible to the target agent without killing its process or session.
-    (fl?.hive ?? hive).send({
+    activeHive.send({
       to: agentId,
       act: 'inform',
       requires_reply: false,
@@ -5382,6 +5384,15 @@ ipcMain.handle('control:interrupt', (evt, agentId: unknown) => {
     }, 'system');
   }
   return result;
+}
+
+ipcMain.handle('control:interrupt', (evt, agentId: unknown) => {
+  if (typeof agentId !== 'string' || !agentId.trim()) return { ok: false, error: 'invalid agent id' };
+  const fl = floorForWebContents(evt.sender);
+  const activeHive = fl?.hive ?? hive;
+  const map = fl?.ptyToAgent ?? ptyToAgent;
+  const owner = fl?.win?.webContents ?? BrowserWindow.fromWebContents(evt.sender)?.webContents ?? null;
+  return executeAgentInterrupt(agentId, activeHive, map, owner);
 });
 ipcMain.handle('control:snapshot', (evt, agentId: unknown) => {
   if (typeof agentId !== 'string') return null;

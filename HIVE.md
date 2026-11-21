@@ -103,7 +103,7 @@ LISP syntax. Seven semantic fields:
   "in_reply_to":   "<prev msgid> | null",
   "from":          "agent.researcher",
   "to":            "agent.coder | orchestrator | broadcast",
-  "act":           "request | inform | propose | query | agree | refuse | done",
+  "act":           "request | inform | propose | query | agree | refuse | done | interrupt",
   "subject":       "short human-readable summary",
   "body":          "free text / markdown / structured payload",
   "hops":          3,            // ++ per reply; capped to kill ping-pong loops
@@ -112,6 +112,16 @@ LISP syntax. Seven semantic fields:
   "created_at":    "ISO-8601"
 }
 ```
+
+### Orchestrator-only interrupt
+
+The current orchestrator (including a promoted acting orchestrator) can send
+`{"to":"<agent-id>","act":"interrupt"}` to interrupt that agent's current
+turn. The router authorizes this act only from the current orchestrator identity;
+other senders are rejected and logged. Accepted interrupts use the same debounced
+engine-specific path as the UI (Escape for Claude, one Ctrl+C for Codex/unknown),
+leave the PTY/session alive, and are recorded in `log.jsonl`. Interrupt messages
+are commands, not ordinary inbox mail.
 
 Anti-livelock rules: only `request`/`query`/`propose` obligate a reply (pure
 `inform`/`done` are terminal); every reply increments `hops`; past a hop cap the

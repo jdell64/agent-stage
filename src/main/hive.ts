@@ -57,7 +57,9 @@ type McpDefaultsMap = { [id: string]: { enabled: boolean } } | undefined;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-export type MessageAct = 'request' | 'inform' | 'propose' | 'query' | 'agree' | 'refuse' | 'done';
+export type MessageAct = 'request' | 'inform' | 'propose' | 'query' | 'agree' | 'refuse' | 'done' | 'interrupt';
+
+export interface HiveInterruptResult { ok: boolean; error?: string }
 
 /** What `settleInbox` did to a released worker's mailbox. */
 export interface SettledInbox {
@@ -451,6 +453,7 @@ export class HiveManager {
   }
 
   private routerTimer: NodeJS.Timeout | null = null;
+  private interruptHandler: ((agentId: string) => HiveInterruptResult) | null = null;
 
   /** The embedded OTLP collector's loopback URL, set by the main process once the
    *  collector is bound (telemetry.ts). null = telemetry off → no OTel env is
@@ -2125,6 +2128,17 @@ export class HiveManager {
   private routeMessage(msg: HiveMessage): void {
     const reg = this.registry();
     const orchestratorId = reg.orchestratorId ?? 'orchestrator';
+    if (msg.act === 'interrupt') {
+      if (msg.from !== orchestratorId) {
+        this.appendLog({ kind: 'interrupt-rejected', from: msg.from, to: msg.to, id: msg.id, reason: 'not-orchestrator' });
+        return;
+      }
+      let result: HiveInterruptResult;
+      try { result = this.interruptHandler?.(msg.to) ?? { ok: false, error: 'interrupt handler unavailable' }; }
+      catch (error) { result = { ok: false, error: error instanceof Error ? error.message : String(error) }; }
+      this.appendLog({ kind: 'interrupt-command', from: msg.from, to: msg.to, id: msg.id, ok: result.ok, error: result.error });
+      return;
+    }
     // The hive has no separate human-approval queue — approvals are native to
     // each agent's Claude Code session (and approvable remotely). A message aimed
     // at "human" is handled by the orchestrator, the human's proxy here.
@@ -2230,6 +2244,11 @@ export class HiveManager {
   private routedObserver: ((msg: HiveMessage, targets: string[]) => void) | null = null;
   setRoutedObserver(cb: ((msg: HiveMessage, targets: string[]) => void) | null): void {
     this.routedObserver = cb;
+  }
+
+  /** Install the main-process action used for orchestrator-only interrupt messages. */
+  setInterruptHandler(handler: ((agentId: string) => HiveInterruptResult) | null): void {
+    this.interruptHandler = handler;
   }
 
   /** Tell the renderer a message was routed, with its resolved recipients, so
@@ -3534,7 +3553,7 @@ Write one JSON file into \`outbox/\` (any filename ending in \`.json\`):
 \`\`\`json
 {
   "to": "<agent-id> | orchestrator | broadcast",
-  "act": "request | inform | propose | query | agree | refuse | done",
+  "act": "request | inform | propose | query | agree | refuse | done | interrupt",
   "subject": "one-line summary",
   "body": "the details",
   "conversation": "carry this across a thread (optional)",
@@ -3543,6 +3562,15 @@ Write one JSON file into \`outbox/\` (any filename ending in \`.json\`):
 \`\`\`
 
 The harness fills in \`id\`, \`from\`, \`hops\`, and timestamps.
+
+### Orchestrator interrupt
+The current orchestrator may interrupt one live agent by writing a message with
+\`act: "interrupt"\` and \`to: "<agent-id>"\`. The harness ignores any sender
+other than the current orchestrator (including the currently promoted acting
+orchestrator). It uses the same engine-specific, debounced interrupt as the UI:
+Escape for Claude, one Ctrl+C for Codex/unknown. The agent process and session stay
+alive. Every accepted, rejected, or debounced attempt is recorded in \`log.jsonl\`.
+This act does not deliver ordinary inbox mail.
 
 ## Rules of the road
 - Only \`request\`, \`query\`, and \`propose\` expect a reply. \`inform\` and \`done\` are terminal —
