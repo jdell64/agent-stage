@@ -944,6 +944,11 @@ const api = {
     ipcRenderer.on('hive:enqueueToAgent', listener);
     return () => ipcRenderer.removeListener('hive:enqueueToAgent', listener);
   },
+  onQuotaWake: (cb: (e: { agentId: string; inboxIds: string[]; attempt: number }) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: { agentId: string; inboxIds: string[]; attempt: number }) => cb(payload);
+    ipcRenderer.on('control:quotaWake', listener);
+    return () => ipcRenderer.removeListener('control:quotaWake', listener);
+  },
   /** A MAIN-initiated agent spawn (e.g. a voice hire via rt-5) — the renderer adds
    *  the floor card from this descriptor since it didn't initiate the hire itself. */
   onHiveAgentSpawned: (

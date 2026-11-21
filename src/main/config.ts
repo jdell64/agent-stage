@@ -281,6 +281,11 @@ export interface HarnessConfig {
   /** Agent ids whose automatic inbox/queue delivery is paused. Pending messages
    *  stay durable until the operator explicitly resumes delivery. */
   autoDeliveryPausedAgents?: string[];
+  /** Pending quota reset wake timers, persisted across an app restart. */
+  quotaWakeStates?: Array<{
+    agentId: string; engine: string; resetAt: number; inboxIds: string[]; attempts: number;
+    nextAt: number; baselineActivityAt: number;
+  }>;
   /** Passed to every spawned agent as `--max-turns <n>` when set; unset = no cap
    *  (Claude Code's default). A coarse runaway guard independent of the breaker. */
   maxTurns?: number;

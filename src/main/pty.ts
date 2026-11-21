@@ -332,6 +332,11 @@ export function parseNpmCmdShim(shimPath: string, content: string): NpmShimTarge
 export class PtyManager {
   private sessions = new Map<string, PtySession>();
   private webContents: WebContents | null = null;
+  private outputHandler: ((id: string, data: string) => void) | null = null;
+
+  setOutputHandler(handler: ((id: string, data: string) => void) | null): void {
+    this.outputHandler = handler;
+  }
   /** Fired when a PTY exits on its OWN (child finished/crashed/killed
    *  externally), so the main process can run the SAME lifecycle teardown
    *  (archive, worktree removal, map cleanup) that the explicit kill() path
@@ -729,6 +734,7 @@ export class PtyManager {
         // Keep only the trailing window; slice AFTER appending so a single
         // oversized write still leaves us its end (the part that explains a death).
         session.tail = (session.tail + data).slice(-TAIL_MAX);
+        try { this.outputHandler?.(opts.id, data); } catch { /* output observers never break PTY delivery */ }
         // Route to the session's owner window (multi-window owner routing).
         this.safeSend(`pty:data:${opts.id}`, data, session.owner);
       });

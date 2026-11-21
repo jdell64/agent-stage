@@ -71,6 +71,7 @@ import { buildWorkerLaunch } from './workerLaunch';
 import { applyResumeToArgs, resolveSpawnCommandAndFlags, tokenizeCommand } from '../shared/commandLine';
 import { ControlRegistry } from './control';
 import { WorkerWakeWatchdog, WORKER_WAKE_REPORT_MS, activityEvidenceAt, type WorkerWakeFacts } from './workerWake';
+import { QuotaWakeScheduler, QUOTA_WAKE_IDLE_MS, markQuotaNoticeSeen, resetAtForEngine, usageEngineForProvider, type PersistedQuotaWake } from './quotaWake';
 import { inboxNudgeText } from '../shared/hiveNudge';
 import { resolveOrchestratorName, setThemeOrchestratorName, getThemeOrchestratorName } from '../shared/orchestratorIdentity';
 import { buildRemoteControlSessionName } from '../shared/providerAutomation';
@@ -154,6 +155,7 @@ process.on('unhandledRejection', (reason) => {
 const ptyManager = new PtyManager();
 const interruptLastAt = new Map<string, number>();
 const INTERRUPT_DEBOUNCE_MS = 500;
+const lastRendererPtyWriteAt = new Map<string, number>();
 
 function runCodexDaemonCommand(
   executable: string,
@@ -352,6 +354,42 @@ function standingGoalFromRoster(agentId: string): string | null {
 // background window can't leave a worker parked on an unread inbox forever).
 // HookServer feeds it the hook stream so a permission/HITL prompt blocks nudges.
 const workerWake = new WorkerWakeWatchdog();
+const quotaWake = new QuotaWakeScheduler();
+const quotaOutputTail = new Map<string, string>();
+ptyManager.setOutputHandler((ptyId, data) => {
+  const agentId = ptyToAgent.get(ptyId);
+  if (!agentId) return;
+  if (!markQuotaNoticeSeen(quotaOutputTail, agentId, data) || quotaWake.get(agentId)) return;
+  const meta = hive.registry().agents[agentId];
+  if (!meta) return;
+  // An operator pause has no quota reset contract; never claim ownership of it.
+  if (control.isAutoDeliveryPaused(agentId)) return;
+  let availability: unknown;
+  try {
+    const root = hive.root();
+    if (!root) return;
+    availability = JSON.parse(readFileSync(join(root, 'usage-availability.json'), 'utf8'));
+  } catch { return; }
+  const fetchedAt = availability && typeof availability === 'object'
+    ? Date.parse(String((availability as Record<string, unknown>).fetchedAt ?? '')) : NaN;
+  if (!Number.isFinite(fetchedAt) || Date.now() - fetchedAt > 12 * 60 * 60_000) {
+    console.warn(`[quota-wake] ${agentId}: usage snapshot is stale; leaving delivery unchanged`);
+    return;
+  }
+  const provider = inferAgentProvider(meta.command ?? '', meta.provider);
+  const resetAt = resetAtForEngine(availability, usageEngineForProvider(provider));
+  if (!resetAt) {
+    console.warn(`[quota-wake] ${agentId}: quota notice detected but no future reset is available for ${provider}`);
+    return;
+  }
+  const ids = hive.inbox(agentId).map((m) => m.id).filter(Boolean);
+  control.pauseAutoDelivery(agentId, true);
+  const paused = new Set(readConfig().autoDeliveryPausedAgents ?? []);
+  paused.add(agentId);
+  quotaWake.schedule(agentId, provider, resetAt, ids);
+  writeConfig({ autoDeliveryPausedAgents: [...paused].sort(), quotaWakeStates: quotaWake.snapshot() });
+  console.log(`[quota-wake] ${agentId}: pausing delivery until ${new Date(resetAt).toISOString()}`);
+});
 // HookServer needs BOTH: Oscar's control registry (HITL pause/gate/steer/halt via
 // hook returns) AND Jim's breaker (feed recordToolUse on each PostToolUse).
 const hookServer = new HookServer(
@@ -897,7 +935,11 @@ function teardownPty(id: string, opts?: { preserveWorktree?: boolean }, owner?: 
     // PTY never leaves an orphan loopback listener. No-op for non-proxy agents.
     try { activeHive.stopProxyBridge(agentId); } catch (e) { console.error('[hive] stopProxyBridge failed:', e); }
     if (activeHive.enabled()) {
-      try { activeHive.setArchived(agentId, true); } catch (e) { console.error('[hive] setArchived failed:', e); }
+      try {
+        activeHive.setArchived(agentId, true);
+        quotaWake.clear(agentId);
+        writeConfig({ quotaWakeStates: quotaWake.snapshot() });
+      } catch (e) { console.error('[hive] setArchived failed:', e); }
     }
   }
   // 2) Remove the isolated worktree, if any. Non-blocking; errors are logged.
@@ -1453,6 +1495,8 @@ function archiveOrphanedAgents(): void {
       if (id === reg.orchestratorId) continue;        // orchestrator is never archived
       if (ptyForAgent(id)) continue;         // has a live PTY → genuinely active
       hive.setArchived(id, true);            // stale archived:false orphan → archive
+      quotaWake.clear(id);
+      writeConfig({ quotaWakeStates: quotaWake.snapshot() });
       console.log('[migration] archived orphaned agent (no live PTY):', id);
     }
   } catch (e) {
@@ -3831,6 +3875,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
 ipcMain.handle('pty:write', (evt, id: string, data: string) => {
   if (typeof id !== 'string' || typeof data !== 'string') return { ok: false, error: 'invalid args' };
   const owner = evt.sender;
+  lastRendererPtyWriteAt.set(id, Date.now());
   return ptyManager.write(id, data, owner);
 });
 ipcMain.handle('pty:resize', (evt, id: string, cols: number, rows: number) => {
@@ -4512,6 +4557,10 @@ ipcMain.handle('hive:setArchived', (evt, id: unknown, archived: unknown) => {
   const activeHive = fl?.hive ?? hive;
   if (!activeHive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
   activeHive.setArchived(id, archived === true);
+  if (archived === true) {
+    quotaWake.clear(id);
+    writeConfig({ quotaWakeStates: quotaWake.snapshot() });
+  }
   return { ok: true };
 });
 ipcMain.handle('hive:patchAgentRole', (evt, id: unknown, role: unknown) => {
@@ -5800,6 +5849,10 @@ registerRealtimeActionIpc({
   setArchived: (id, archived) => {
     if (!hive.enabled()) return { ok: false, error: 'hive disabled' };
     hive.setArchived(id, archived);
+    if (archived) {
+      quotaWake.clear(id);
+      writeConfig({ quotaWakeStates: quotaWake.snapshot() });
+    }
     try { liveWebContents()?.send(archived ? 'hive:agentArchived' : 'hive:agentSpawned', { id }); } catch { /* window gone */ }
     return { ok: true };
   },
@@ -6393,6 +6446,7 @@ function bootstrapHiveServices(): void {
   }
   hiveInstanceLock = acquired.lock;
   hive.ensureHive();
+  quotaWake.restore((readConfig().quotaWakeStates ?? []) as PersistedQuotaWake[]);
   hive.refreshGeneratedDocs();
   // Tell the hive what it is running inside, BEFORE anything spawns: the prompt
   // builder reads this, so an agent spawned earlier would never learn it.
@@ -6480,6 +6534,58 @@ function nudgeWorker(ptyId: string, ids: string[] = []): void {
   }, 140);
 }
 
+/** Re-arm quota-paused agents when their provider window resets. */
+function runQuotaWakeBeat(): void {
+  if (!hive.enabled()) return;
+  const reg = hive.registry();
+  const now = Date.now();
+  const facts = quotaWake.agentIds().flatMap((agentId) => {
+    const meta = reg.agents[agentId];
+    const ptyId = ptyForAgent(agentId);
+    if (!meta || !ptyId) return [];
+    const ids = hive.inbox(agentId).map((m) => m.id).filter(Boolean);
+    quotaWake.refreshInbox(agentId, ids);
+    const pty = ptyManager.list().find((p) => p.id === ptyId);
+    const snap = control.snapshot(agentId);
+    const usage = telemetry.getAgentUsage(agentId);
+    const activityAt = activityEvidenceAt({ usage, spans: telemetry.getSpans(agentId) });
+    const quietMs = ptyManager.idleFor(ptyId) ?? 0;
+    const lastRendererWrite = lastRendererPtyWriteAt.get(ptyId) ?? 0;
+    return [{
+      agentId, ptyId,
+      idle: quietMs >= QUOTA_WAKE_IDLE_MS && (!lastRendererWrite || now - lastRendererWrite >= QUOTA_WAKE_IDLE_MS)
+        && !snap.paused && !snap.halted && !meta.onHold && !!pty?.pid
+        && !workerWake.isHumanPromptActive(agentId, now),
+      onHold: !!meta.onHold,
+      lastActivityAt: Math.max(activityAt, workerWake.turnHookAt(agentId))
+    }];
+  });
+  for (const action of quotaWake.tick(facts, now)) {
+    if (action.kind === 'failed') {
+      const body = `Quota reset wake failed after ${action.attempts} idle-only attempts. Check the agent's session and provider access.`;
+      hive.appendLog({ kind: 'quota-wake-failed', agentId: action.agentId, attempts: action.attempts });
+      hive.send({ to: 'orchestrator', act: 'inform', requires_reply: false, subject: `Wake failed: ${action.agentId}`, body }, 'system');
+      continue;
+    }
+    const ptyId = ptyForAgent(action.agentId);
+    if (!ptyId) continue;
+    // Lift only the quota pause, then wake the PTY once. The event clears the
+    // renderer's duplicate nudge and re-arms its per-id dedup for later mail.
+    control.pauseAutoDelivery(action.agentId, false);
+    const paused = new Set(readConfig().autoDeliveryPausedAgents ?? []);
+    paused.delete(action.agentId);
+    writeConfig({ autoDeliveryPausedAgents: [...paused].sort() });
+    workerWake.clearAnnounced(action.agentId, action.inboxIds);
+    try { liveWebContents()?.send('control:quotaWake', { agentId: action.agentId, inboxIds: action.inboxIds, attempt: action.attempt }); } catch { /* renderer may be gone */ }
+    nudgeWorker(ptyId, action.inboxIds);
+    console.log(`[quota-wake] nudged ${action.agentId} after reset (attempt ${action.attempt}/${3})`);
+  }
+  const states = quotaWake.snapshot();
+  if (JSON.stringify(states) !== JSON.stringify(readConfig().quotaWakeStates ?? [])) {
+    writeConfig({ quotaWakeStates: states });
+  }
+}
+
 /** Main-process inbox-wake beat (issue #151, fix A): the renderer's idle nudge
  *  (useHive.ts) is the only path that wakes a worker parked on an undrained
  *  inbox — and it lives on a setInterval in the renderer, which a throttled or
@@ -6490,6 +6596,7 @@ function nudgeWorker(ptyId: string, ids: string[] = []): void {
  *  same nudge the renderer would have. Orchestrator is never a candidate (its heartbeat
  *  path already re-engages it). */
 function runWorkerWakeBeat(): void {
+  runQuotaWakeBeat();
   if (!hive.enabled()) return;
   const reg = hive.registry();
   if (!reg?.agents || !reg.orchestratorId) return;

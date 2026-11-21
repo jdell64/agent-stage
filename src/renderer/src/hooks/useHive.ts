@@ -20,7 +20,7 @@ import { DEFAULT_CONTEXT_TRIGGER, type ContextRule } from '../../../shared/trigg
 import type { AgentProvider } from '../../../shared/agentProvider';
 import { bridgeOf, providerPreset } from '../../../shared/agentProvider';
 import { isDurableRole, preferredAgentRole, roleForHiveSpawn } from '../../../shared/agentRole';
-import { inboxNudgeText } from '../../../shared/hiveNudge';
+import { inboxNudgeText, isInboxNudge } from '../../../shared/hiveNudge';
 import { resolveOrchestratorName, setThemeOrchestratorName } from '../../../shared/orchestratorIdentity';
 import { acquireTerminal, resetTerminal, isTerminalAutomationSafe } from '@/components/terminalPool';
 import { canDeliverToAgent, deliverWithAcknowledgement, checkPrecondition } from './queueDelivery';
@@ -350,6 +350,21 @@ export function useHive(config: HarnessConfig | null): void {
   // has already been typed — guards effect #3b against re-seeding. (ondev-b)
   const seeded = useRef<Set<string>>(new Set());
   const seenTerminalHandoffs = useRef<Set<string>>(new Set());
+
+  // The main process owns quota-reset timing and sends its single wake directly
+  // to the idle PTY. Clear renderer dedup for the mail held during that pause,
+  // and remove any stale queued inbox nudge so it cannot duplicate the wake.
+  useEffect(() => window.cth.onQuotaWake(({ agentId, inboxIds }) => {
+    const seen = nudged.current[agentId];
+    if (seen) {
+      for (const id of inboxIds) seen.delete(id);
+      for (const id of inboxIds) seen.add(id); // main process already delivered this wake
+    }
+    const queue = useStore.getState().messageQueues[agentId] ?? [];
+    for (const item of queue) {
+      if (isInboxNudge(item.instruction ?? item.text)) useStore.getState().removeQueuedMessage(agentId, item.id);
+    }
+  }), []);
   // Per-pty timestamp guarding auto-revive (effect #7) against a double-respawn
   // when power-resume + screen-unlock arrive back-to-back: an id revived (or
   // mid-revive) within REVIVE_DEBOUNCE_MS is skipped. Set BEFORE the async spawn
