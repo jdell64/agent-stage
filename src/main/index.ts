@@ -5406,7 +5406,7 @@ ipcMain.handle('app:setNotifications', (_evt, val) => writeConfig({ notification
  *  (Linux has no universal settings URI, so the renderer never sends one there).
  *  Used by the onboarding "Permissions & reliability" step. */
 ipcMain.handle('app:openExternal', async (_evt, url: unknown) => {
-  if (typeof url !== 'string' || !/^(x-apple\.systempreferences:|ms-settings:|https:\/\/)/.test(url)) {
+  if (typeof url !== 'string' || !/^(x-apple\.systempreferences:|ms-settings:|https?:\/\/)/.test(url)) {
     return { ok: false, error: 'blocked url' };
   }
   await shell.openExternal(url);

@@ -5,7 +5,7 @@
  *
  * The provider underlines tokens found in agent output, so the text is hostile
  * by assumption. Both verdicts are therefore gated on ⌘/Ctrl: a path goes to a
- * metadata-only stat, and a URL goes to the https-only main-process opener.
+ * metadata-only stat, and a URL goes to the http/https-only main-process opener.
  * Losing either gate turns printed agent output into a one-click browser
  * navigation or file open, which is why this is pinned rather than left to
  * review.

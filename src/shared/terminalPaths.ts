@@ -97,9 +97,9 @@ export function pathTokenMatcher(): RegExp {
 /**
  * URL tokens in terminal output.
  *
- * `https` only, deliberately. The main-process opener (`app:openExternal`)
- * accepts nothing else, so underlining an `http://` would hand back a link that
- * cannot open — which is the complaint in #281, not a fix for it.
+ * `http` and `https` only, deliberately. The main-process opener
+ * (`app:openExternal`) accepts these web schemes plus the platform settings
+ * schemes, so terminal links are safe to hand to the browser.
  *
  * A matched URL is offered as-is. Punycode homographs and embedded credentials
  * (`https://user:pass@evil.com@good.com/x`) therefore reach the opener intact —
@@ -108,10 +108,10 @@ export function pathTokenMatcher(): RegExp {
  *
  * These must be matched BEFORE path tokens, and their spans skipped there. The
  * path matcher's Windows-drive branch reads the `s:/` inside `https://` as
- * drive `s:`, so a URL currently matches as an absolute path on a drive nobody
+ * drive `s:`, so an `http(s)` URL currently matches as an absolute path on a drive nobody
  * has, resolves to nothing, and silently does nothing on click.
  */
-const URL_TOKEN_RE = /https:\/\/[^\s<>"'`{}|\\^]+/gi;
+const URL_TOKEN_RE = /https?:\/\/[^\s<>"'`{}|\\^]+/gi;
 
 /** A fresh matcher. The regex is stateful (`g`), so callers must never share one. */
 export function urlTokenMatcher(): RegExp {
@@ -127,8 +127,8 @@ const URL_TRAILING_PROSE = /["'`>,.;:!?]+$/;
  * MSDN links carry balanced ones (`/wiki/Foo_(bar)`), and eating that character
  * lands the user on a 404 with nothing to show why.
  *
- * The scheme is lowercased because the main-process opener matches `^https://`
- * case-sensitively; a terminal that printed `HTTPS://` would otherwise be
+ * The scheme is lowercased because the main-process opener matches web schemes
+ * case-sensitively; a terminal that printed an uppercase web scheme would otherwise be
  * refused after we had already underlined it.
  */
 export function stripUrlToken(raw: string): string {
@@ -143,7 +143,7 @@ export function stripUrlToken(raw: string): string {
     const next = out.replace(URL_TRAILING_PROSE, '');
     if (next !== out) { out = next; trimmed = true; }
   }
-  return out.replace(/^https:\/\//i, 'https://');
+  return out.replace(/^https?:\/\//i, (scheme) => scheme.toLowerCase());
 }
 
 /** One underlinable token on a line, with its 0-based half-open span. */
@@ -175,9 +175,9 @@ export function terminalLinkSpans(text: string): TerminalLinkSpan[] {
   let um: RegExpExecArray | null;
   while ((um = ure.exec(text)) !== null) {
     const token = stripUrlToken(um[0]);
-    // `https://)` strips down to the bare scheme; underlining that would open
+    // `http(s)://)` strips down to the bare scheme; underlining that would open
     // the browser on nothing.
-    if (!/^https:\/\/./.test(token)) continue;
+    if (!/^https?:\/\/.+/.test(token)) continue;
     out.push({ kind: 'url', token, raw: token, start: um.index, end: um.index + token.length });
   }
 
