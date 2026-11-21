@@ -10,6 +10,8 @@ import {
   takePendingFloorSquad,
   squadDefinition,
   squadWorkers,
+  floorOrderKey,
+  orderFloorSummaries,
   FLOOR_SQUADS,
   FLOOR_NAME_MAX
 } from '../../src/shared/floors';
@@ -36,6 +38,38 @@ describe('pending floor squad', () => {
     const floor = { isPrimary: true, pendingSquad: 'empty' as const };
     expect(takePendingFloorSquad(floor, '/primary/home')).toBeNull();
     expect(floor.pendingSquad).toBe('empty');
+  });
+});
+
+describe('persisted floor ordering', () => {
+  const floors = [
+    { floorNumber: 1, home: '/work/main' },
+    { floorNumber: 2, home: '/work/api' },
+    { floorNumber: 3, home: '/work/web' }
+  ];
+
+  it('keeps the existing highest-floor-first order when no order has been saved', () => {
+    expect(orderFloorSummaries(floors, []).map((floor) => floor.floorNumber)).toEqual([3, 2, 1]);
+  });
+
+  it('restores the saved sequence by stable home when floor numbers change', () => {
+    const saved = [floorOrderKey(floors[2]), floorOrderKey(floors[0]), floorOrderKey(floors[1])];
+    const reopened = [
+      { floorNumber: 4, home: '/work/api' },
+      { floorNumber: 2, home: '/work/web' },
+      { floorNumber: 1, home: '/work/main' }
+    ];
+    expect(orderFloorSummaries(reopened, saved).map((floor) => floor.home)).toEqual([
+      '/work/web', '/work/main', '/work/api'
+    ]);
+  });
+
+  it('places a newly opened folder after saved floors', () => {
+    const saved = [floorOrderKey(floors[1])];
+    const current = [...floors, { floorNumber: 4, home: '/work/new' }];
+    expect(orderFloorSummaries(current, saved).map((floor) => floor.home)).toEqual([
+      '/work/api', '/work/new', '/work/web', '/work/main'
+    ]);
   });
 });
 

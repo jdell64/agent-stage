@@ -108,11 +108,13 @@ import {
   deriveFloorShortTag,
   extractFolderName,
   findFloorByHome,
+  floorOrderKey,
   floorDisplayName,
   formatFloorWindowTitle,
   isFloorSquadPreset,
   nextFloorNumber,
   normalizeHivePath,
+  orderFloorSummaries,
   sanitizeFloorName,
   shortenHomePath,
   takePendingFloorSquad,
@@ -671,10 +673,14 @@ function summarizeFloor(rt: FloorRuntime): FloorSummary {
 }
 
 function listFloorSummaries(): FloorSummary[] {
-  return [...floorsByWcId.values()]
+  const floors = [...floorsByWcId.values()]
     .filter((rt) => !rt.win.isDestroyed())
     .sort((a, b) => a.floorNumber - b.floorNumber)
     .map(summarizeFloor);
+  const savedOrder = persist.getKv<unknown>('floors.order');
+  return orderFloorSummaries(floors, Array.isArray(savedOrder)
+    ? savedOrder.filter((key): key is string => typeof key === 'string')
+    : []);
 }
 
 function syncFloorWindowTitles(): void {
@@ -4708,6 +4714,23 @@ ipcMain.handle('window:newFloor', (_evt, initialHome?: unknown) => {
 
 // ─── IPC: multiple floors (Building Tower & Discord-style Floor Rail) ───────
 ipcMain.handle('floors:list', (evt) => getFloorsSnapshotFor(evt.sender));
+
+ipcMain.handle('floors:reorder', (_evt, rawFloorNumbers: unknown) => {
+  const floors = listFloorSummaries();
+  if (!Array.isArray(rawFloorNumbers) || rawFloorNumbers.length !== floors.length) {
+    return { ok: false, error: 'Floor order must include every open floor exactly once.' };
+  }
+  const floorNumbers = rawFloorNumbers.filter((value): value is number => Number.isInteger(value));
+  const openNumbers = new Set(floors.map((floor) => floor.floorNumber));
+  if (floorNumbers.length !== floors.length || new Set(floorNumbers).size !== floors.length
+    || floorNumbers.some((number) => !openNumbers.has(number))) {
+    return { ok: false, error: 'Floor order must include every open floor exactly once.' };
+  }
+  const byNumber = new Map(floors.map((floor) => [floor.floorNumber, floor]));
+  persist.setKv('floors.order', floorNumbers.map((number) => floorOrderKey(byNumber.get(number)!)));
+  broadcastFloorsChanged();
+  return { ok: true };
+});
 
 /** Where a candidate floor folder stands: git branch/dirty, and the floor that already holds it. */
 async function describeFloorFolder(rawPath: string): Promise<FloorFolderStatus> {

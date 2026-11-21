@@ -1036,6 +1036,8 @@ const api = {
 
   floors: {
     list: (): Promise<FloorsSnapshot> => ipcRenderer.invoke('floors:list'),
+    reorder: (floorNumbers: number[]): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('floors:reorder', floorNumbers),
     /** Open a floor: a bare folder path (legacy) or the New Floor options `{ home, name, squad }`. */
     open: (arg?: string | OpenFloorOptions): Promise<{ ok: boolean; floorNumber?: number; focusedExisting?: boolean; error?: string }> =>
       ipcRenderer.invoke('floors:open', arg),

@@ -209,6 +209,28 @@ export interface FloorSummary {
   agents: FloorAgentPreview[];
 }
 
+/** Stable identity used for saving tower order across close/reopen and app restarts. */
+export function floorOrderKey(floor: Pick<FloorSummary, 'floorNumber' | 'home'>): string {
+  const home = normalizeHivePath(floor.home);
+  return home ? `home:${home}` : `floor:${floor.floorNumber}`;
+}
+
+/** Apply persisted floor order; unknown/new floors follow saved floors by floor number. */
+export function orderFloorSummaries<T extends Pick<FloorSummary, 'floorNumber' | 'home'>>(
+  floors: readonly T[],
+  savedOrder: readonly string[]
+): T[] {
+  const rank = new Map(savedOrder.map((key, index) => [key, index]));
+  return [...floors].sort((a, b) => {
+    const aRank = rank.get(floorOrderKey(a));
+    const bRank = rank.get(floorOrderKey(b));
+    if (aRank !== undefined && bRank !== undefined) return aRank - bRank;
+    if (aRank !== undefined) return -1;
+    if (bRank !== undefined) return 1;
+    return b.floorNumber - a.floorNumber;
+  });
+}
+
 export interface FloorsSnapshot {
   currentFloorNumber: number;
   floors: FloorSummary[];
