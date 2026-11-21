@@ -143,7 +143,14 @@ export function EditAgentModal({ agent, onClose }: EditAgentModalProps) {
       {/* Same box as Add Agent (940 / 95vw / 86vh). They are the two halves of
           one job — describe an agent — and a tall narrow dialog next to a wide
           one reads as two unrelated screens. */}
-      <div onClick={(e) => e.stopPropagation()} style={{ width: 940, maxWidth: '95vw' }}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        // Keep editing keys inside the dialog. In particular, Delete and
+        // Backspace must never reach a stage-level shortcut while a rename or
+        // briefing field has focus.
+        onKeyDown={(e) => e.stopPropagation()}
+        style={{ width: 940, maxWidth: '95vw' }}
+      >
         <PixelPanel variant="dialog" title="EDIT AGENT" style={{ padding: 16 }} noPadding>
           <div style={{
             display: 'flex', flexDirection: 'column', gap: 14,
