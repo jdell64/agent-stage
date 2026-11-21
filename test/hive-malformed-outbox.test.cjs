@@ -25,7 +25,7 @@ async function floor(t) {
   await hive.ensureAgent({ id: 'worker-1', name: 'Creed', provider: 'claude', cwd: home });
 
   const outbox = path.join(home, 'hive', 'agents', 'worker-1', 'outbox');
-  return { hive, outbox };
+  return { hive, outbox, home };
 }
 
 function writeOutbox(outbox, filename, raw) {
@@ -139,7 +139,11 @@ test('an irreparable poison file does not block a valid file in the same pass', 
 });
 
 test('outboxes without a registry entry are ignored and logged once', async (t) => {
-  const { hive } = await floor(t);
+  const { hive, home } = await floor(t);
+  const realNow = Date.now;
+  let now = realNow();
+  Date.now = () => now;
+  t.after(() => { Date.now = realNow; });
   const outbox = path.join(hive.root(), 'agents', 'removed-agent', 'outbox');
   fs.mkdirSync(outbox, { recursive: true });
   fs.writeFileSync(path.join(outbox, 'phantom.json'), JSON.stringify({ to: 'orchestrator', body: 'not registered' }));
@@ -149,6 +153,30 @@ test('outboxes without a registry entry are ignored and logged once', async (t) 
   assert.equal(fs.existsSync(path.join(outbox, 'phantom.json')), true);
   assert.equal(hive.logTail(100).filter((entry) => entry.reason === 'unregistered-outbox' && entry.from === 'removed-agent').length, 1);
   assert.equal(hive.inbox('orchestrator-1').length, 0);
+
+  const restarted = new HiveManager(() => home);
+  assert.equal(restarted.routeOnce(), 0);
+  assert.equal(restarted.logTail(100).filter((entry) => entry.reason === 'unregistered-outbox' && entry.from === 'removed-agent').length, 1);
+  now += 60 * 60 * 1000 + 1;
+  assert.equal(restarted.routeOnce(), 0);
+  assert.equal(restarted.logTail(100).filter((entry) => entry.reason === 'unregistered-outbox' && entry.from === 'removed-agent').length, 2);
+});
+
+test('overflowing the orphan LRU emits at most one summary per hour', async (t) => {
+  const { hive } = await floor(t);
+  const agents = path.join(hive.root(), 'agents');
+  for (let i = 0; i < 101; i++) {
+    const outbox = path.join(agents, `unknown-${i}`, 'outbox');
+    fs.mkdirSync(outbox, { recursive: true });
+    fs.writeFileSync(path.join(outbox, 'message.json'), '{}');
+  }
+
+  assert.equal(hive.routeOnce(), 0);
+  assert.equal(hive.unregisteredOutboxesLoggedAt.size, 100);
+  assert.equal(hive.logTail(200).filter((entry) => entry.reason === 'unregistered-outbox').length, 100);
+  assert.equal(hive.logTail(200).filter((entry) => entry.reason === 'unregistered-outbox-overflow').length, 1);
+  assert.equal(hive.routeOnce(), 0);
+  assert.equal(hive.logTail(200).filter((entry) => entry.reason === 'unregistered-outbox-overflow').length, 1);
 });
 
 test('archived but registered agents can still route their outbox', async (t) => {
@@ -181,6 +209,14 @@ test('delivered messages are copied to durable quarantine before unlink if both 
   fs.writeFileSync(path.join(agents, '.outbox-quarantine'), 'block secondary quarantine');
   const original = JSON.stringify({ to: 'orchestrator', act: 'inform', body: 'delivered once' });
   writeOutbox(outbox, 'delivered.json', original);
+  const appendLog = hive.appendLog.bind(hive);
+  hive.appendLog = (event) => {
+    if (event.kind === 'outbox-quarantined' && event.quarantine) {
+      assert.equal(fs.existsSync(path.join(outbox, 'delivered.json')), true, 'source remains until quarantine metadata is logged');
+      assert.equal(fs.readFileSync(path.join(hive.root(), event.quarantine), 'utf8'), original, 'durable copy exists before unlink');
+    }
+    appendLog(event);
+  };
 
   assert.equal(hive.routeOnce(), 1);
   assert.equal(hive.inbox('orchestrator-1')[0].body, 'delivered once');
@@ -193,5 +229,5 @@ test('delivered messages are copied to durable quarantine before unlink if both 
   assert.equal(hive.inbox('orchestrator-1').filter((message) => message.body === 'delivered once').length, 1);
   const quarantineEvent = hive.logTail(100).find((entry) => entry.kind === 'outbox-quarantined' && entry.file === 'delivered.json');
   assert.ok(quarantineEvent);
-  assert.ok(quarantineEvent.id, 'durable quarantine log identifies the dropped message');
+  assert.equal(quarantineEvent.id, hive.inbox('orchestrator-1')[0].id, 'durable quarantine log identifies the message');
 });

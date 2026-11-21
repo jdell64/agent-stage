@@ -451,13 +451,52 @@ export class HiveManager {
   }
 
   private routerTimer: NodeJS.Timeout | null = null;
-  private unregisteredOutboxesLogged = new Set<string>();
+  private unregisteredOutboxesLoggedAt = new Map<string, number>();
   private unarchivedOutboxFiles = new Set<string>();
+  private unregisteredThrottleHydrated = false;
+  private lastUnregisteredOverflowLogAt = 0;
 
-  private rememberOutboxKey(set: Set<string>, key: string): void {
-    set.delete(key);
-    set.add(key);
-    while (set.size > 100) set.delete(set.values().next().value!);
+  private hydrateUnregisteredOutboxThrottle(): void {
+    if (this.unregisteredThrottleHydrated) return;
+    this.unregisteredThrottleHydrated = true;
+    const now = Date.now();
+    for (const value of this.logTail(500) as Array<Record<string, unknown>>) {
+      const ts = value.ts;
+      if (typeof ts !== 'number' || now - ts >= 60 * 60 * 1000 || ts > now) continue;
+      if (value.reason === 'unregistered-outbox-overflow') {
+        this.lastUnregisteredOverflowLogAt = Math.max(this.lastUnregisteredOverflowLogAt, ts);
+      } else if (value.reason === 'unregistered-outbox' && typeof value.from === 'string') {
+        this.unregisteredOutboxesLoggedAt.delete(value.from);
+        this.unregisteredOutboxesLoggedAt.set(value.from, ts);
+        while (this.unregisteredOutboxesLoggedAt.size > 100) {
+          this.unregisteredOutboxesLoggedAt.delete(this.unregisteredOutboxesLoggedAt.keys().next().value!);
+        }
+      }
+    }
+  }
+
+  private logUnregisteredOutbox(id: string): void {
+    this.hydrateUnregisteredOutboxThrottle();
+    const now = Date.now();
+    const previous = this.unregisteredOutboxesLoggedAt.get(id);
+    if (previous !== undefined) {
+      this.unregisteredOutboxesLoggedAt.delete(id);
+      this.unregisteredOutboxesLoggedAt.set(id, previous);
+      if (now - previous < 60 * 60 * 1000) return;
+    }
+    if (previous !== undefined) this.unregisteredOutboxesLoggedAt.delete(id);
+    for (const [knownId, ts] of this.unregisteredOutboxesLoggedAt) {
+      if (now - ts >= 60 * 60 * 1000) this.unregisteredOutboxesLoggedAt.delete(knownId);
+    }
+    if (this.unregisteredOutboxesLoggedAt.size < 100) {
+      this.unregisteredOutboxesLoggedAt.set(id, now);
+      this.appendLog({ kind: 'drop', reason: 'unregistered-outbox', from: id });
+      return;
+    }
+    if (now - this.lastUnregisteredOverflowLogAt >= 60 * 60 * 1000) {
+      this.lastUnregisteredOverflowLogAt = now;
+      this.appendLog({ kind: 'drop', reason: 'unregistered-outbox-overflow', limit: 100 });
+    }
   }
 
   /** The embedded OTLP collector's loopback URL, set by the main process once the
@@ -2299,16 +2338,14 @@ export class HiveManager {
     if (!root) return 0;
     const agentsDir = join(root, 'agents');
     if (!existsSync(agentsDir)) return 0;
+    this.hydrateUnregisteredOutboxThrottle();
     const registeredAgents = new Set(Object.keys(this.registry().agents ?? {}));
     let routed = 0;
     for (const id of readdirSync(agentsDir)) {
       const outbox = join(agentsDir, id, 'outbox');
       if (!existsSync(outbox)) continue;
       if (!registeredAgents.has(id)) {
-        if (!this.unregisteredOutboxesLogged.has(id)) {
-          this.rememberOutboxKey(this.unregisteredOutboxesLogged, id);
-          this.appendLog({ kind: 'drop', reason: 'unregistered-outbox', from: id });
-        }
+        this.logUnregisteredOutbox(id);
         continue;
       }
       for (const f of readdirSync(outbox)) {
@@ -2342,8 +2379,8 @@ export class HiveManager {
           try {
             mkdirSync(durableQuarantine, { recursive: true });
             copyFileSync(full, join(durableQuarantine, durableName));
-            unlinkSync(full);
             this.appendLog({ kind: 'outbox-quarantined', from: id, file: f, id: messageId, quarantine: `outbox-quarantine/${id}/${durableName}` });
+            unlinkSync(full);
             return;
           } catch { /* retain the source unless a durable log copy succeeds */ }
 
@@ -2355,7 +2392,11 @@ export class HiveManager {
           } catch {
             // Nothing could be persisted or moved. Avoid repeat delivery this
             // process; the original source remains available for operator recovery.
-            this.rememberOutboxKey(this.unarchivedOutboxFiles, outboxKey);
+            this.unarchivedOutboxFiles.delete(outboxKey);
+            this.unarchivedOutboxFiles.add(outboxKey);
+            while (this.unarchivedOutboxFiles.size > 100) {
+              this.unarchivedOutboxFiles.delete(this.unarchivedOutboxFiles.values().next().value!);
+            }
           }
         };
         try {
