@@ -227,6 +227,15 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
     setCommand(buildSpawnCommand(config, nextModel, id));
   };
   const preset = providerPreset(provider);
+  const codexFullAccess = provider === 'codex' && /(?:^|\s)-s\s+danger-full-access(?:\s|$)/.test(command);
+  const toggleCodexFullAccess = () => {
+    if (provider !== 'codex') return;
+    if (codexFullAccess) {
+      setCommand(command.replace(/(?:\s|^)-s\s+danger-full-access(?=\s|$)/, '').replace(/\s{2,}/g, ' ').trim());
+    } else {
+      setCommand(`${command.trim()} -s danger-full-access`.trim());
+    }
+  };
   const [goal, setGoal] = useState(pendingHire?.goal ?? '');
   const [isolate, setIsolate] = useState(pendingHire?.isolate ?? false);
   // #2 — optional Claude session id to continue. When set, the spawn seeds that
@@ -1009,6 +1018,15 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                         style={{ ...inputStyle, fontFamily: 'var(--cth-font-mono)' }}
                       />
                     </Row>
+                    {provider === 'codex' && (
+                      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, margin: '4px 0 6px', fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-700)', cursor: 'pointer' }}>
+                        <input type="checkbox" checked={codexFullAccess} onChange={toggleCodexFullAccess} />
+                        <span>
+                          <strong>{tr('addAgent.codexFullAccess')}</strong>{' '}
+                          <span style={{ color: 'var(--cth-coral)' }}>{tr('addAgent.codexFullAccessWarning')}</span>
+                        </span>
+                      </label>
+                    )}
                   </>
                 )}
 
