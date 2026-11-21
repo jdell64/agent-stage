@@ -97,6 +97,8 @@ type PathOwner = 'nobody' | 'other' | 'self' | 'unknown';
 
 export class HookServer {
   private server: Server | null = null;
+  private legacyServer: Server | null = null;
+  private legacyPath: string | null = null;
   /** This process's identity, echoed back by the ownership ping so a probe can
    *  tell "our listener" from "some other live instance" at the same path. */
   private readonly instanceId = randomUUID();
@@ -185,7 +187,7 @@ export class HookServer {
    *      stolen;
    *    - bound and verified → nothing to do. */
   async ensureListening(): Promise<HookSocketHealth> {
-    if (this.stopped || this.binding) return this.health();
+    if (this.stopped) return this.health();
     const sock = this.hive.sockPath();
     if (!sock) {
       if (this.lastError !== 'NOROOT') {
@@ -194,6 +196,8 @@ export class HookServer {
       }
       return this.health();
     }
+    this.ensureLegacyListening();
+    if (this.binding) return this.health();
     if (this.server?.listening && this.bound) {
       // Cheap check first (POSIX): the file at the path is still the one we bound.
       if (this.mark && sameMark(this.mark, markOf(sock))) return this.health();
@@ -211,6 +215,31 @@ export class HookServer {
     }
     await this.bind(sock);
     return this.health();
+  }
+
+  /** Keep the pre-instance-scoped Windows pipe accepting hooks from old live PTYs. */
+  private ensureLegacyListening(): void {
+    const path = this.hive.legacySockPath();
+    if (!path) {
+      try { this.legacyServer?.close(); } catch { /* already closed */ }
+      this.legacyServer = null;
+      this.legacyPath = null;
+      return;
+    }
+    if (this.legacyPath === path && this.legacyServer?.listening) return;
+    try { this.legacyServer?.close(); } catch { /* old root is already gone */ }
+    this.legacyServer = null;
+    this.legacyPath = null;
+    const server = createServer((conn) => this.serve(conn));
+    this.legacyServer = server;
+    this.legacyPath = path;
+    server.once('error', (error) => {
+      if (this.legacyServer !== server) return;
+      this.legacyServer = null;
+      this.legacyPath = null;
+      console.warn(`[hive] legacy hook pipe unavailable at ${path}:`, error);
+    });
+    server.listen(path);
   }
 
   private async bind(sock: string, retryAfterOrphans = false): Promise<void> {
@@ -404,6 +433,10 @@ export class HookServer {
     const now = sock && process.platform !== 'win32' ? markOf(sock) : null;
     const stranger = !!this.mark && !!now && !sameMark(this.mark, now);
     this.detach(stranger);
+    const legacy = this.legacyServer;
+    this.legacyServer = null;
+    this.legacyPath = null;
+    try { legacy?.close(); } catch { /* already closed */ }
   }
 
   /** The transcript file of an agent's CURRENT session, if any hook has fired. */
