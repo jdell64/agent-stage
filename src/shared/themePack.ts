@@ -126,6 +126,7 @@ export interface PackManifest {
   cameraBounds?: CameraBounds;
   quips?: ThemeQuips;
   errandSpots: ErrandSpot[];
+  idleZones?: Tile[];
   monitor: MonitorConfig;
   palette: { background: string; noteColors: Record<string, string> };
   fonts?: { family: string; file: string; weight?: string; slot?: 'display' | 'ui' | 'mono' }[];
@@ -347,6 +348,9 @@ export function validatePack(input: ValidateInput): ValidateResult {
     }
   }
   if (!Array.isArray(m.errandSpots)) err('bad-errands', 'errandSpots', 'errandSpots must be an array');
+  if (m.idleZones !== undefined && (!Array.isArray(m.idleZones) || m.idleZones.some((tile) => !isTile(tile)))) {
+    err('bad-idle-zones', 'idleZones', 'idleZones must be an array of tile coordinates');
+  }
   if (!Array.isArray(m.tilesets) || m.tilesets.length < 1) {
     err('bad-tilesets', 'tilesets', 'at least one tileset is required');
   } else if (m.tilesets.length > PACK_LIMITS.maxTilesets) {
@@ -576,6 +580,24 @@ export function validatePack(input: ValidateInput): ValidateResult {
     if (!ok) warn('bad-errand', `errandSpots[${i}]`, 'errand spot is invalid or its stand tile is out of bounds / blocked; dropped');
     return ok;
   });
+
+  if (manifest.idleZones !== undefined) {
+    const seen = new Set<string>();
+    out.idleZones = manifest.idleZones.filter((zone, i) => {
+      const ok = standOk(zone);
+      if (!ok) {
+        warn('bad-idle-zone', `idleZones[${i}]`, 'idle zone is invalid, out of bounds, or blocked; dropped');
+        return false;
+      }
+      const key = `${zone.x},${zone.y}`;
+      if (seen.has(key)) {
+        warn('duplicate-idle-zone', `idleZones[${i}]`, 'duplicate idle zone; dropped');
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+  }
 
   const mon = manifest.monitor;
   const monOk = isObj(mon) && isInt(mon.offTopLeftGid) && Array.isArray(mon.onGids) &&

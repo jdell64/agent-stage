@@ -140,6 +140,8 @@ export interface ThemeConfig {
   /** Optional, already validated pack-provided additions to generic thought lines. */
   quips?: ThemeQuips;
   errandSpots: ErrandSpot[];
+  /** Theme-owned destinations used by idle agents while they roam. */
+  idleZones?: Tile[];
   monitor: MonitorConfig;
   palette: PaletteConfig;
   cast: ThemeCast;
