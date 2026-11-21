@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const loadTs = require('./load-ts.cjs');
 const { HiveManager } = loadTs('src/main/hive.ts');
-const { claimInterrupt } = loadTs('src/shared/interrupt.ts');
+const { claimInterrupt, installScopedInterruptHandler } = loadTs('src/shared/interrupt.ts');
 
 async function floor(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hive-interrupt-router-'));
@@ -65,4 +65,47 @@ test('orchestrator interrupt messages share the debounce gate', async (t) => {
   assert.equal(hive.routeOnce(), 2);
   assert.deepEqual(outcomes, [true, false]);
   assert.equal(hive.logTail(100).filter((entry) => entry.kind === 'interrupt-command').length, 2);
+});
+
+test('secondary-floor orchestrator interrupts only PTYs owned by that floor', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hive-interrupt-secondary-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const primary = new HiveManager(() => path.join(home, 'primary'));
+  const secondary = new HiveManager(() => path.join(home, 'secondary'));
+  await primary.ensureAgent({ id: 'primary-orchestrator', name: 'Primary orchestrator', provider: 'claude', cwd: home, isOrchestrator: true });
+  await primary.ensureAgent({ id: 'primary-worker', name: 'Primary worker', provider: 'claude', cwd: home });
+  await secondary.ensureAgent({ id: 'secondary-orchestrator', name: 'Secondary orchestrator', provider: 'claude', cwd: home, isOrchestrator: true });
+  await secondary.ensureAgent({ id: 'secondary-worker', name: 'Secondary worker', provider: 'claude', cwd: home });
+
+  const primaryMap = new Map([['pty-primary', 'primary-worker']]);
+  const secondaryMap = new Map([['pty-secondary', 'secondary-worker']]);
+  const primaryOwner = { floor: 'primary' };
+  const secondaryOwner = { floor: 'secondary' };
+  const calls = [];
+  const execute = (agentId, _hive, ptyMap, owner) => {
+    const pty = [...ptyMap].find(([, id]) => id === agentId)?.[0];
+    calls.push({ agentId, pty, owner });
+    return pty ? { ok: true } : { ok: false, error: `no live pty for agent: ${agentId}` };
+  };
+  installScopedInterruptHandler(primary, primaryMap, () => primaryOwner, execute);
+  installScopedInterruptHandler(secondary, secondaryMap, () => secondaryOwner, execute);
+
+  const secondaryOutbox = path.join(home, 'secondary', 'hive', 'agents', 'secondary-orchestrator', 'outbox');
+  const send = (filename, to) => fs.writeFileSync(path.join(secondaryOutbox, filename), JSON.stringify({
+    to, act: 'interrupt', subject: 'Interrupt current turn', body: ''
+  }));
+  send('same-floor.json', 'secondary-worker');
+  send('cross-floor.json', 'primary-worker');
+
+  assert.equal(secondary.routeOnce(), 2);
+  assert.deepEqual(calls.sort((a, b) => a.agentId.localeCompare(b.agentId)), [
+    { agentId: 'primary-worker', pty: undefined, owner: secondaryOwner },
+    { agentId: 'secondary-worker', pty: 'pty-secondary', owner: secondaryOwner },
+  ]);
+  const commands = secondary.logTail(100).filter((entry) => entry.kind === 'interrupt-command');
+  assert.deepEqual(commands.map((entry) => [entry.to, entry.ok]).sort((a, b) => a[0].localeCompare(b[0])), [
+    ['primary-worker', false],
+    ['secondary-worker', true]
+  ]);
+  assert.equal(primary.logTail(100).some((entry) => entry.kind === 'interrupt-command'), false);
 });

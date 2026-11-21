@@ -132,7 +132,7 @@ import {
   type NewFloorInfo
 } from '../shared/floors';
 import { BuildingMemory } from './buildingMemory';
-import { claimInterrupt, interruptAuditBody, interruptKeyForProvider } from '../shared/interrupt';
+import { claimInterrupt, installScopedInterruptHandler, interruptAuditBody, interruptKeyForProvider } from '../shared/interrupt';
 import { acquireOrReuseHiveInstanceLock, type HiveInstanceLock } from './hiveInstanceLock';
 import { hookEndpointForInstance } from '../shared/hookEndpoint';
 
@@ -292,7 +292,7 @@ const hive = new HiveManager(
     try { wc.send(channel, payload); return true; } catch { return false; }
   }
 );
-hive.setInterruptHandler((agentId) => executeAgentInterrupt(agentId, hive, ptyToAgent, primaryWebContents()));
+installScopedInterruptHandler(hive, ptyToAgent, primaryWebContents, executeAgentInterrupt);
 let hiveInstanceLock: HiveInstanceLock | null = null;
 // LOG-STALL-AV: the app keeps log.jsonl / cost-ledger.jsonl open (closed on reset, change-home, quit).
 hive.keepAppendFilesOpen(true);
@@ -619,6 +619,7 @@ function createSecondaryFloorRuntime(
     pendingSquad: squad
   };
   runtimeRef.current = rt;
+  installScopedInterruptHandler(floorHive, rt.ptyToAgent, () => wc, executeAgentInterrupt);
   return rt;
 }
 
