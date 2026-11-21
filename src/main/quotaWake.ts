@@ -21,10 +21,21 @@ export type QuotaWakeAction =
   | { kind: 'wake'; agentId: string; inboxIds: string[]; attempt: number }
   | { kind: 'failed'; agentId: string; attempts: number };
 
-export const QUOTA_WAKE_JITTER_MS = 15_000;
+export const QUOTA_WAKE_JITTER_MS = 60_000;
+const QUOTA_WAKE_MIN_JITTER_MS = 5_000;
 export const QUOTA_WAKE_IDLE_MS = 12_000;
 export const QUOTA_WAKE_RETRY_MS = 5 * 60_000;
 export const QUOTA_WAKE_MAX_ATTEMPTS = 3;
+
+/** Stable per-agent offset prevents a provider reset from waking the whole fleet together. */
+export function quotaWakeJitterForAgent(agentId: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < agentId.length; i++) {
+    hash ^= agentId.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return QUOTA_WAKE_MIN_JITTER_MS + ((hash >>> 0) % (QUOTA_WAKE_JITTER_MS - QUOTA_WAKE_MIN_JITTER_MS + 1));
+}
 
 export function clearInboxWakeDedup(seen: Set<string>, ids: readonly string[]): void {
   for (const id of ids) seen.delete(id);
@@ -44,7 +55,7 @@ export class QuotaWakeScheduler {
     if (!agentId || !Number.isFinite(resetAt) || resetAt <= now) return;
     this.states.set(agentId, {
       agentId, engine, resetAt, inboxIds: [...new Set(inboxIds.filter(Boolean))], attempts: 0,
-      nextAt: resetAt + QUOTA_WAKE_JITTER_MS, baselineActivityAt: 0
+      nextAt: resetAt + quotaWakeJitterForAgent(agentId), baselineActivityAt: 0
     });
   }
 
