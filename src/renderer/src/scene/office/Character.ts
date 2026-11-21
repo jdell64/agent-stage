@@ -134,6 +134,7 @@ export class Character {
   private hideTimer: ReturnType<typeof setTimeout> | null = null;
 
   private thoughtBubble: ThoughtBubble;
+  private thoughtBubblesVisible = true;
   /** Persistent nameplate below the feet — unlike the thought bubble, never
    *  fades independently. World-positioned rather than parented to the sprite
    *  so it can sort above every avatar (see NAME_TAG_Z); `plate` is the opaque
@@ -421,12 +422,20 @@ export class Character {
   /** Show what the agent is doing right now in the thought cloud above its head.
    *  Empty text renders an animated "…" (thinking); `tool` adds a small glyph. */
   showThought(text: string, tool?: string): void {
+    if (!this.thoughtBubblesVisible) return;
     this.thoughtBubble.show(text, tool);
   }
 
   /** Fade the thought cloud out after a short linger — the agent went quiet. */
   hideThought(): void {
     this.thoughtBubble.startLinger();
+  }
+
+  /** Hide thought bubbles at map zooms where their text is not useful. */
+  setThoughtBubblesVisible(visible: boolean): void {
+    if (this.thoughtBubblesVisible === visible) return;
+    this.thoughtBubblesVisible = visible;
+    if (!visible) this.thoughtBubble.hide();
   }
 
   /** The thought cloud's current base screen rect (no lift), or null if hidden.

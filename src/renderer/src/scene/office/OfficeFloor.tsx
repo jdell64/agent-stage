@@ -14,6 +14,7 @@ import { hexToNumber, DEFAULT_CHARACTER } from './cast';
 import { pickSoloLine, pickExchange, type BreakSpot } from './cafeteriaLines';
 import { colors } from '@/design/tokens';
 import { FlavorBubbleBudget, pickQuip, resolveBubbleLifts, shouldShowWorkingQuip } from './themeQuips';
+import { thoughtBubblesVisible } from './bubbleScale';
 import { loadTheme, resolveThemeMap, themeTilesetUrls, applyThemeChrome } from './themeLoader';
 import {
   installContextLossRecovery, planInitFailure, DEFAULT_MAX_INIT_RETRIES
@@ -1779,6 +1780,7 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
         const zoom = world.scale.x;
         for (const rt of runtimes.values()) {
           rt.character.setBubbleZoom(zoom);
+          rt.character.setThoughtBubblesVisible(thoughtBubblesVisible(zoom));
           rt.character.update(dt);
         }
         updateCafeteria(dt);
