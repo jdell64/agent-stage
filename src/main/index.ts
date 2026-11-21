@@ -2652,7 +2652,12 @@ function stopWebhookServer(): void {
 interface WindowBounds { x?: number; y?: number; width: number; height: number }
 
 const DEFAULT_WIN = { width: 1440, height: 900 };
-const MIN_WIN = { width: 1280, height: 800 };
+// Keep the compact floor usable on a laptop-sized window. The floor rail and
+// detail pane use flex min-width: 0, while the agent strip scrolls horizontally,
+// so the old 1280x800 floor was unnecessary and prevented useful side-by-side
+// work on smaller screens. These bounds still leave room for the rail, toolbar,
+// and the smallest readable detail/terminal layout.
+const MIN_WIN = { width: 1024, height: 640 };
 
 /** Validate + clamp restored bounds: enforce the minimum size, and drop a
  *  position that no longer lands on any connected display (monitor unplugged) so
