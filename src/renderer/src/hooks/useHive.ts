@@ -24,7 +24,7 @@ import { inboxNudgeText } from '../../../shared/hiveNudge';
 import { resolveOrchestratorName, setThemeOrchestratorName } from '../../../shared/orchestratorIdentity';
 import { acquireTerminal, resetTerminal, isTerminalAutomationSafe } from '@/components/terminalPool';
 import { canDeliverToAgent, deliverWithAcknowledgement, checkPrecondition } from './queueDelivery';
-import { pickSpawnCharacter, restorePersistedCharacter } from '@/scene/office/spawnCharacter';
+import { pickSpawnCharacter, restorePersistedCharacter, spawnDisplayName } from '@/scene/office/spawnCharacter';
 import { getTheme } from '@/scene/office/themeRegistry';
 import { loadTheme } from '@/scene/office/themeLoader';
 import { CAST, DEFAULT_CHARACTER, ORCHESTRATOR_CHARACTER } from '@/scene/office/cast';
@@ -1171,7 +1171,9 @@ export function useHive(config: HarnessConfig | null): void {
       const project = (rec.cwd || '').split(/[\\/]/).filter(Boolean).pop() || 'hive';
       const agent: Agent = {
         id: rec.id,
-        name: rec.name || rec.id,
+        // A main-side spawn may have no human-facing name. Never surface its
+        // ticket/agent id as the floor label; use the selected theme character.
+        name: rec.name?.trim() || spawnDisplayName(character, themed.length ? themed : CAST),
         character: character as Agent["character"],
         accent: askedAccent ?? SPAWN_ACCENTS[h],
         description: rec.role || 'a fresh harness',

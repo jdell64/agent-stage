@@ -9,6 +9,11 @@
  *  and only when the whole cast is taken a stable hash of the id. */
 export interface SpawnCastMember { name: string; displayName: string }
 
+/** Display-name pool for workers whose spawn record has no human name. Theme
+ * packs may provide richer overflow casts; these neutral names keep ticket IDs
+ * out of the floor UI while still giving overflow workers a stable identity. */
+export const GENERIC_ENSIGN_NAMES = ['Alex', 'Bailey', 'Casey', 'Jordan', 'Morgan', 'Riley', 'Taylor', 'Quinn'] as const;
+
 /** Keep a persisted theme character through the restart respawn path.
  *
  * The built-in `normalizeCharacter` helper only understands the procedural
@@ -50,4 +55,9 @@ export function pickSpawnCharacter(opts: {
   let h = 0;
   for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   return roster[h % roster.length].name;
+}
+
+/** Resolve the name shown on the floor for a selected character. */
+export function spawnDisplayName(character: string, roster: readonly SpawnCastMember[]): string {
+  return roster.find((member) => member.name === character)?.displayName?.trim() || character;
 }

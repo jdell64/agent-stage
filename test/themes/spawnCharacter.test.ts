@@ -1,9 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { pickSpawnCharacter, resolveFloorCharacter, restorePersistedCharacter } from '../../src/renderer/src/scene/office/spawnCharacter';
+import { pickSpawnCharacter, resolveFloorCharacter, restorePersistedCharacter, spawnDisplayName } from '../../src/renderer/src/scene/office/spawnCharacter';
 
 const office = ['michael', 'jim', 'pam', 'dwight', 'ryan'].map((n) => ({ name: n, displayName: n[0].toUpperCase() + n.slice(1) }));
 
 describe('pickSpawnCharacter', () => {
+  it('uses the selected cast display name when a spawn has no human name', () => {
+    expect(spawnDisplayName('pam', office)).toBe('Pam');
+    expect(spawnDisplayName('unknown', office)).toBe('unknown');
+  });
   it('uses the explicit character when the active theme has it', () => {
     expect(pickSpawnCharacter({ explicit: 'pam', name: 'x', id: 'w1', roster: office, used: [], fallback: 'ben' })).toBe('pam');
   });
