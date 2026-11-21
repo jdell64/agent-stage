@@ -89,6 +89,10 @@ being reassigned. A newly opened workspace is appended after the saved floors.
 Open secondary floor workspace paths are persisted in the SQLite `kv` store.
 At the next app launch, existing folders reopen in their saved order without
 creating a second starting squad; closing a floor removes it from that list.
+Each secondary workspace's selected theme is also stored by normalized path and
+restored independently. New Floor previews available themes and cast portraits;
+the selection is passed only to that floor's renderer and does not update the
+application-wide default theme.
 
 <div align="right">(<a href="#munder-difflin">↑ back to top</a>)</div>
 

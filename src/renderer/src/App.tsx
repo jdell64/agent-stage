@@ -230,7 +230,8 @@ export function App() {
       // Groq key is set (Settings keeps this in sync on save).
       useStore.getState().setHasGroqKey(!!c.groqApiKey);
       // Mirror the active office theme so OfficeFloor renders it. Settings keeps this synced.
-      useStore.getState().setOfficeTheme(c.officeTheme ?? DEFAULT_THEME_ID);
+      const floorTheme = new URLSearchParams(window.location.search).get('floorTheme');
+      useStore.getState().setOfficeTheme(floorTheme ?? c.officeTheme ?? DEFAULT_THEME_ID);
       // Mirror the triggers so Settings → Connections and the Command Center's
       // Triggers tab read one list, not two copies that drift — whichever surface
       // saves calls these same setters and the other repaints. No extra IPC: main

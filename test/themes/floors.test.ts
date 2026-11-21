@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   normalizeHivePath,
+  floorThemeForHome,
+  rememberFloorTheme,
   findFloorByHome,
   nextFloorNumber,
   deriveFloorShortTag,
@@ -11,6 +13,17 @@ import {
 } from '../../src/shared/floors';
 
 describe('src/shared/floors', () => {
+  describe('floor-scoped themes', () => {
+    it('persists independent themes by normalized workspace path and rejects unavailable packs', () => {
+      const first = rememberFloorTheme({}, 'C:\\Work\\Alpha', 'munder-difflin');
+      const both = rememberFloorTheme(first, 'C:\\Work\\Beta', 'plain');
+
+      expect(floorThemeForHome(both, 'c:\\work\\alpha\\', ['munder-difflin', 'plain'])).toBe('munder-difflin');
+      expect(floorThemeForHome(both, 'C:\\Work\\Beta', ['munder-difflin', 'plain'])).toBe('plain');
+      expect(floorThemeForHome(both, 'C:\\Work\\Alpha', ['plain'])).toBeNull();
+    });
+  });
+
   describe('normalizeHivePath', () => {
     it('normalizes null, undefined and empty strings to null', () => {
       expect(normalizeHivePath(null)).toBeNull();

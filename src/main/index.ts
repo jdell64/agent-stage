@@ -99,6 +99,7 @@ import {
   withCodexRemoteArgs
 } from '../shared/codexRemote';
 import { scanThemes, readPack, validateThemePack, getThemeSearchPaths, readThemeOrchestratorName, setConfiguredThemesDir } from './themes';
+import { DEFAULT_THEME_ID } from '../shared/themePack';
 import {
   runStandupTick, projectTasks,
   type FloorState, type StandupDecision, type StandupSkipRecord
@@ -109,6 +110,7 @@ import {
   deriveFloorShortTag,
   extractFolderName,
   findFloorByHome,
+  floorThemeForHome,
   floorOrderKey,
   floorDisplayName,
   formatFloorWindowTitle,
@@ -117,6 +119,7 @@ import {
   normalizeHivePath,
   orderFloorSummaries,
   restorableFloorHomes,
+  rememberFloorTheme,
   sanitizeFloorName,
   shortenHomePath,
   takePendingFloorSquad,
@@ -658,6 +661,25 @@ function floorAliasFor(home: string | null | undefined): string | null {
   const key = normalizeHivePath(home);
   if (!key) return null;
   return sanitizeFloorName(readConfig().floorAliases?.[key]);
+}
+
+function availableFloorTheme(id: unknown): string | null {
+  if (typeof id !== 'string') return null;
+  return scanThemes().packs.find((pack) => pack.id === id && pack.available)?.id ?? null;
+}
+
+function savedFloorTheme(home: string | null | undefined): string | null {
+  try {
+    const available = scanThemes().packs.filter((pack) => pack.available).map((pack) => pack.id);
+    return floorThemeForHome(persist.getKv<unknown>('floors.themes'), home, available);
+  } catch { return null; }
+}
+
+function saveFloorTheme(home: string | null | undefined, theme: string): void {
+  if (!normalizeHivePath(home)) return;
+  try {
+    persist.setKv('floors.themes', rememberFloorTheme(persist.getKv<unknown>('floors.themes'), home, theme));
+  } catch { /* preference persistence must not prevent opening a floor */ }
 }
 
 /** Persist (or clear, when `name` is blank) a floor's alias, keyed by its folder. */
@@ -3042,11 +3064,14 @@ function createWindow(): BrowserWindow {
 /** Add an isolated renderer for a floor inside the one host BrowserWindow. */
 function createFloorView(
   initialHome: string | null,
-  extra: { name?: string | null; squad?: FloorSquadPreset | null } = {}
+  extra: { name?: string | null; squad?: FloorSquadPreset | null; theme?: string | null } = {}
 ): FloorRuntime | null {
   const host = mainWindow;
   if (!host || host.isDestroyed()) return null;
   const floorNumber = nextFloorNumber([...floorsByWcId.values()].map((rt) => rt.floorNumber));
+  const chosenTheme = availableFloorTheme(extra.theme);
+  const floorTheme = chosenTheme ?? savedFloorTheme(initialHome)
+    ?? availableFloorTheme(readConfig().officeTheme) ?? DEFAULT_THEME_ID;
   const view = new WebContentsView({
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -3115,17 +3140,18 @@ function createFloorView(
   );
 
   if (extra.name && rt.home) setFloorAlias(rt.home, extra.name);
+  if (chosenTheme && rt.home) saveFloorTheme(rt.home, chosenTheme);
   if (rt.home) {
     ensureHarnessHome(rt.home);
     bootstrapSecondaryFloorServices(rt);
   }
   persistOpenFloors();
-  const query = `floor=${floorNumber}`;
+  const query = new URLSearchParams({ floor: String(floorNumber), floorTheme }).toString();
   if (isDev && process.env.ELECTRON_RENDERER_URL) {
     const url = process.env.ELECTRON_RENDERER_URL;
     void wc.loadURL(`${url}${url.includes('?') ? '&' : '?'}${query}`);
   } else {
-    void wc.loadFile(join(__dirname, '../renderer/index.html'), { query: { floor: String(floorNumber) } });
+    void wc.loadFile(join(__dirname, '../renderer/index.html'), { query: { floor: String(floorNumber), floorTheme } });
   }
   activateFloor(rt);
   broadcastFloorsChanged();
@@ -3168,7 +3194,7 @@ function closeFloorView(rt: FloorRuntime): boolean {
 /** Open a new floor view — gated by the multiWindow flag. Returns its runtime,
  *  or null when the feature is off (the entry points are hidden in that case,
  *  but the IPC stays defensive). */
-function openFloor(initialHome?: string | null, extra: { name?: string | null; squad?: FloorSquadPreset | null } = {}): FloorRuntime | null {
+function openFloor(initialHome?: string | null, extra: { name?: string | null; squad?: FloorSquadPreset | null; theme?: string | null } = {}): FloorRuntime | null {
   if (!readConfig().multiWindow) return null;
   if (initialHome) {
     const resolved = resolve(expandTilde(initialHome));
@@ -3181,7 +3207,7 @@ function openFloor(initialHome?: string | null, extra: { name?: string | null; s
       }
     }
   }
-  return createFloorView(initialHome ?? null, { name: extra.name ?? null, squad: extra.squad ?? null });
+  return createFloorView(initialHome ?? null, { name: extra.name ?? null, squad: extra.squad ?? null, theme: extra.theme ?? null });
 }
 
 /** Reopen the user's secondary workspace floors after the primary window exists. */
@@ -3197,7 +3223,7 @@ function restoreOpenFloors(): void {
         const resolved = resolve(expandTilde(home));
         if (!existsSync(resolved) || !statSync(resolved).isDirectory()) continue;
         // A restored floor resumes its existing workspace; it must not hire a fresh squad.
-        openFloor(resolved, { name: floorAliasFor(resolved), squad: 'empty' });
+        openFloor(resolved, { name: floorAliasFor(resolved), squad: 'empty', theme: savedFloorTheme(resolved) });
       } catch (error) {
         console.warn(`[floors] Could not restore ${home}:`, error);
       }
@@ -4927,6 +4953,7 @@ ipcMain.handle('floors:open', (_evt, arg?: unknown) => {
   const home = typeof opts.home === 'string' && opts.home.trim() ? opts.home.trim() : null;
   const name = sanitizeFloorName(opts.name);
   const squad = isFloorSquadPreset(opts.squad) ? opts.squad : null;
+  const theme = availableFloorTheme(opts.theme);
   if (home) {
     const resolved = resolve(expandTilde(home));
     const existing = findFloorByHome(listFloorSummaries(), resolved);
@@ -4938,7 +4965,7 @@ ipcMain.handle('floors:open', (_evt, arg?: unknown) => {
       }
     }
   }
-  const rt = openFloor(home, { name, squad });
+  const rt = openFloor(home, { name, squad, theme });
   if (!rt) return { ok: false, error: 'Floor views are disabled.' };
   return { ok: true, floorNumber: rt.floorNumber, focusedExisting: false };
 });

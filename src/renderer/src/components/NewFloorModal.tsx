@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { SpritePortrait } from './SpritePortrait';
+import { DEFAULT_THEME_ID, type PackSummary } from '@shared/themePack';
 import {
   FLOOR_NAME_MAX,
   FLOOR_SQUADS,
@@ -31,6 +32,8 @@ export function NewFloorModal({ onClose, onCreate }: NewFloorModalProps) {
   // Until the user types their own alias, the name follows the chosen folder.
   const [nameTouched, setNameTouched] = useState(false);
   const [squad, setSquad] = useState<FloorSquadPreset>('standard');
+  const [themes, setThemes] = useState<PackSummary[]>([]);
+  const [theme, setTheme] = useState<string>(DEFAULT_THEME_ID);
   const [status, setStatus] = useState<FloorFolderStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,6 +42,13 @@ export function NewFloorModal({ onClose, onCreate }: NewFloorModalProps) {
   useEffect(() => {
     let active = true;
     window.cth?.floors?.newFloorInfo?.().then((i) => { if (active) setInfo(i); }).catch(() => { /* ignore */ });
+    Promise.all([window.cth?.listThemes?.(), window.cth?.getConfig?.()]).then(([packs, config]) => {
+      if (!active) return;
+      const available = (packs ?? []).filter((pack) => pack.available);
+      setThemes(available);
+      const configured = config?.officeTheme;
+      setTheme(available.some((pack) => pack.id === configured) ? configured! : available[0]?.id ?? DEFAULT_THEME_ID);
+    }).catch(() => { /* keep the built-in theme */ });
     nameRef.current?.focus();
     return () => { active = false; };
   }, []);
@@ -75,7 +85,7 @@ export function NewFloorModal({ onClose, onCreate }: NewFloorModalProps) {
     if (!canOpen) return;
     setBusy(true);
     setError(null);
-    const res = await onCreate({ home: home.trim(), name: effectiveName, squad });
+    const res = await onCreate({ home: home.trim(), name: effectiveName, squad, theme });
     if (!res.ok) {
       setBusy(false);
       setError(res.error ?? 'Could not open the floor.');
@@ -229,6 +239,39 @@ export function NewFloorModal({ onClose, onCreate }: NewFloorModalProps) {
             </div>
           </section>
 
+          {/* Floor theme */}
+          <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <span style={sectionLabel}>FLOOR THEME</span>
+              <span style={{ fontFamily: 'var(--cth-font-mono)', fontSize: 10.5, color: '#8c8379' }}>Preview · applies to this floor</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
+              {themes.map((pack) => {
+                const selected = pack.id === theme;
+                return (
+                  <button key={pack.id} type="button" aria-pressed={selected} onClick={() => setTheme(pack.id)} style={{
+                    textAlign: 'left', padding: 10, borderRadius: 8,
+                    border: selected ? '1.5px solid #e68a2e' : '1px solid #302b26',
+                    background: selected ? '#26201a' : '#1b1815', color: '#e8e0d5', cursor: 'pointer'
+                  }}>
+                    <span style={{ display: 'block', height: 8, borderRadius: 4, marginBottom: 8, background: pack.swatch ?? '#6b5a4a' }} />
+                    <span style={{ display: 'block', fontFamily: 'var(--cth-font-ui)', fontSize: 13, fontWeight: 700 }}>{pack.name || pack.id}</span>
+                    <span style={{ display: 'block', minHeight: 28, marginTop: 4, fontFamily: 'var(--cth-font-mono)', fontSize: 10, color: '#8c8379', lineHeight: 1.35 }}>{pack.blurb || 'A distinct office look for this floor.'}</span>
+                    <span style={{ display: 'block', marginTop: 5, fontFamily: 'var(--cth-font-mono)', fontSize: 9.5, color: selected ? '#e68a2e' : '#6e665e' }}>{selected ? '● SELECTED PREVIEW' : 'SELECT TO PREVIEW'}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div aria-label="Selected theme character preview" style={{ ...card, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: 18, minHeight: 74, flexWrap: 'wrap' }}>
+              {def.members.map((member) => (
+                <div key={member.label} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }} title={member.role}>
+                  <SpritePortrait character={member.character} scale={1.5} themeId={theme} />
+                  <span style={{ fontFamily: 'var(--cth-font-mono)', fontSize: 8.5, color: '#8c8379' }}>{member.label}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+
           {/* Squad */}
           <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -263,15 +306,6 @@ export function NewFloorModal({ onClose, onCreate }: NewFloorModalProps) {
                   </button>
                 );
               })}
-            </div>
-            <div style={{ ...card, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: 18, minHeight: 74, flexWrap: 'wrap' }}>
-              {def.members.map((m) => (
-                <div key={m.label} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }} title={m.role}>
-                  <SpritePortrait character={m.character} scale={1.5} />
-                  <div style={{ width: 34, height: 4, borderRadius: 2, background: 'linear-gradient(90deg, #6e4726 0%, #9c6738 50%, #6e4726 100%)' }} />
-                  <span style={{ fontFamily: 'var(--cth-font-mono)', fontSize: 8.5, color: '#8c8379' }}>{m.label}</span>
-                </div>
-              ))}
             </div>
           </section>
 
