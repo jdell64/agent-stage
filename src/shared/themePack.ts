@@ -79,6 +79,8 @@ export interface CameraBounds { x: number; y: number; width: number; height: num
 
 export type ThemeQuipStatus = 'working' | 'idle' | 'waiting' | 'blocked' | 'error' | 'done';
 export interface ThemeQuips {
+  /** Theme-wide lines any character may say. */
+  anyone?: string[];
   byStatus?: Partial<Record<ThemeQuipStatus, string[]>>;
   byCharacter?: Record<string, string[]>;
 }
@@ -522,6 +524,8 @@ export function validatePack(input: ValidateInput): ValidateResult {
       return lines.length ? lines : undefined;
     };
     const byStatus: NonNullable<ThemeQuips['byStatus']> = {};
+    let anyone: string[] | undefined;
+    if (raw.anyone !== undefined) anyone = cleanLines(raw.anyone, 'quips.anyone');
     if (raw.byStatus !== undefined) {
       if (!isObj(raw.byStatus)) warn('bad-quips', 'quips.byStatus', 'byStatus must be an object; ignored');
       else {
@@ -550,8 +554,12 @@ export function validatePack(input: ValidateInput): ValidateResult {
         });
       }
     }
-    if (Object.keys(byStatus).length || Object.keys(byCharacter).length) {
-      out.quips = { ...(Object.keys(byStatus).length ? { byStatus } : {}), ...(Object.keys(byCharacter).length ? { byCharacter } : {}) };
+    if (anyone?.length || Object.keys(byStatus).length || Object.keys(byCharacter).length) {
+      out.quips = {
+        ...(anyone?.length ? { anyone } : {}),
+        ...(Object.keys(byStatus).length ? { byStatus } : {}),
+        ...(Object.keys(byCharacter).length ? { byCharacter } : {}),
+      };
     } else delete out.quips;
   }
 

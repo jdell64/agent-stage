@@ -73,6 +73,7 @@ my-office/
   "palette": { "background": "#14151c",
                "noteColors": { "todo": "#f2df8a", "doing": "#9ecbf0", "blocked": "#f0a3a3", "done": "#a8e0b0" } },
   "quips": {                    // optional additions to generic thought-bubble lines
+    "anyone": ["A thought anyone in this cast may have."],
     "byStatus": { "working": ["On it."], "idle": ["Taking five."], "waiting": ["One moment."], "blocked": ["Need help."], "error": ["I need a hand."], "done": ["Finished!"] },
     "byCharacter": { "picard": ["Make it so."] }
   },
@@ -87,7 +88,7 @@ tokens, copy, cast, quips) are reported as warnings and dropped, never fatal.
 
 ### Speech-bubble quips
 
-`quips.byStatus` accepts optional arrays for `working`, `idle`, `waiting`, `blocked`, `error`, and `done`; `quips.byCharacter`
+`quips.anyone` is the theme-wide pool: every character may say these lines. `quips.byStatus` accepts optional arrays for `working`, `idle`, `waiting`, `blocked`, `error`, and `done`; `quips.byCharacter`
 accepts arrays keyed by the character's cast `name` (case-insensitive). Lines from both matching
 keys are added to the app's existing generic lines, then selected at random without repeating the
 previous line for that agent when alternatives exist. Each list accepts up to 50 non-empty lines,
