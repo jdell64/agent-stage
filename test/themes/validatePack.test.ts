@@ -117,6 +117,14 @@ describe('validatePack: happy path', () => {
     expect(codes(r, 'error')).toEqual([]);
     expect(r.pack!.manifest.idleZones).toEqual([{ x: 2, y: 2 }, { x: 7, y: 7 }]);
   });
+  it('warns and drops an idle zone on a blocked tile', () => {
+    const map = baseMap();
+    (map.layers[4] as any).data[22] = 1; // (2, 2), row-major in collision layer
+    const r = validatePack(pack(baseManifest({ idleZones: [{ x: 2, y: 2 }, { x: 3, y: 3 }] }), map));
+    expect(codes(r, 'error')).toEqual([]);
+    expect(codes(r, 'warn')).toContain('bad-idle-zone');
+    expect(r.pack!.manifest.idleZones).toEqual([{ x: 3, y: 3 }]);
+  });
 });
 
 describe('validatePack: errors reject the pack whole', () => {

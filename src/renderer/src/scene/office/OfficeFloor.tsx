@@ -8,6 +8,7 @@ import { TiledMapRenderer } from './TiledMapRenderer';
 import { Camera } from './Camera';
 import { Character, paintCup } from './Character';
 import { resolveFloorCharacter } from './spawnCharacter';
+import { IdleZoneAllocator } from './IdleZoneAllocator';
 import { DeskScreen } from './DeskScreen';
 import { MessageEnvelope, type MessageAct } from './MessageEnvelope';
 import { hexToNumber, DEFAULT_CHARACTER } from './cast';
@@ -254,6 +255,7 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
     const init = async () => {
       // Load the active theme bundle (falls back to 'office' on a bad/absent bundle).
       const theme = await loadTheme(officeTheme);
+      const idleZoneAllocator = new IdleZoneAllocator(theme.idleZones ?? []);
       // Chrome (tokens.css + fonts) restyles the whole page, not just the scene,
       // so it's applied on ACTIVATION here rather than inside the cached
       // loadTheme() step — every switch re-evaluates and replaces/clears it.
@@ -1459,6 +1461,8 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
           seatTile,
           seatDirection: facingForSeat(seatTile, seatInfo?.name),
           idleZones: theme.idleZones,
+          reserveIdleZone: (id, current) => idleZoneAllocator.reserveNext(id, current, (tile) => mapRenderer.isWalkable(tile.x, tile.y)),
+          releaseIdleZone: (id) => idleZoneAllocator.release(id),
           spawnTile: entrance, // walk in from the office door
           glowColor: hexNum(colors.accent[agent.accent]) ?? hexToNumber(member.shirt),
           onClick: (id) => useStore.getState().select(id),
@@ -1482,6 +1486,7 @@ export function OfficeFloor({ isMinimized = false }: { isMinimized?: boolean }) 
       };
 
       const removeCharacter = (id: string) => {
+        idleZoneAllocator.release(id);
         const rt = runtimes.get(id);
         if (!rt) return;
         releaseBreak(rt);                // free any café seat it was holding

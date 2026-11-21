@@ -581,6 +581,24 @@ export function validatePack(input: ValidateInput): ValidateResult {
     return ok;
   });
 
+  if (manifest.idleZones !== undefined) {
+    const seen = new Set<string>();
+    out.idleZones = manifest.idleZones.filter((zone, i) => {
+      const ok = standOk(zone);
+      if (!ok) {
+        warn('bad-idle-zone', `idleZones[${i}]`, 'idle zone is invalid, out of bounds, or blocked; dropped');
+        return false;
+      }
+      const key = `${zone.x},${zone.y}`;
+      if (seen.has(key)) {
+        warn('duplicate-idle-zone', `idleZones[${i}]`, 'duplicate idle zone; dropped');
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+  }
+
   const mon = manifest.monitor;
   const monOk = isObj(mon) && isInt(mon.offTopLeftGid) && Array.isArray(mon.onGids) &&
     mon.onGids.every((g) => Array.isArray(g) && g.length === 3 && g.every(isInt));

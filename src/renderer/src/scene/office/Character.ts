@@ -102,6 +102,8 @@ interface CharacterOptions {
   seatDirection?: Direction;
   /** Theme-owned idle destinations. When absent, use local wandering. */
   idleZones?: readonly { x: number; y: number }[];
+  reserveIdleZone?: (agentId: string, current: { x: number; y: number }) => { x: number; y: number } | undefined;
+  releaseIdleZone?: (agentId: string) => void;
   onClick?: (agentId: string) => void;
 }
 
@@ -129,6 +131,8 @@ export class Character {
   private direction: Direction = 'down';
   private arrivalCallback: (() => void) | null = null;
   private idleZones: readonly { x: number; y: number }[];
+  private reserveIdleZone?: CharacterOptions['reserveIdleZone'];
+  private releaseIdleZone?: CharacterOptions['releaseIdleZone'];
 
   public isVisible = false;
   private fadeDirection: 'in' | 'out' | null = null;
@@ -184,6 +188,8 @@ export class Character {
     this.deskTile = options.seatTile;
     this.seatDirection = options.seatDirection ?? 'down';
     this.idleZones = options.idleZones ?? [];
+    this.reserveIdleZone = options.reserveIdleZone;
+    this.releaseIdleZone = options.releaseIdleZone;
     this.onClick = options.onClick;
 
     // Appear at the spawn tile (the door) and walk in from there.
@@ -269,6 +275,7 @@ export class Character {
   }
 
   walkToAndThen(tile: { x: number; y: number }, callback: () => void): void {
+    this.releaseIdleZone?.(this.agentId);
     this.idleLoop = false; // a directed walk-and-do (e.g. a café break) owns the avatar
     this.arrivalCallback = callback;
     this.moveTo(tile);
@@ -292,6 +299,7 @@ export class Character {
   /** Walk to the home desk (if away) and sit. `working` toggles the focus halo.
    *  Shared by sitAtDesk (real work/wait) and the idle-loop rest. */
   private walkToDeskAndSit(working: boolean): void {
+    this.releaseIdleZone?.(this.agentId);
     this.glowOn = working;
     this.wandering = false;
     const t = this.getTilePosition();
@@ -405,6 +413,7 @@ export class Character {
 
   /** Walk to an arbitrary tile (e.g. the waiting area when blocked); stands on arrival. */
   walkToTile(tile: { x: number; y: number }): void {
+    this.releaseIdleZone?.(this.agentId);
     this.idleLoop = false;
     this.pendingWork = null;
     this.pendingSit = false;
@@ -983,10 +992,9 @@ export class Character {
     // Prefer a theme-owned idle destination so a pack can spread workers over
     // several recognizable areas instead of clustering around one random tile.
     const cur = this.getTilePosition();
-    if (this.idleZones.length > 0) {
-      const candidates = this.idleZones.filter((zone) => zone.x !== cur.x || zone.y !== cur.y);
-      const zone = candidates[Math.floor(Math.random() * candidates.length)];
-      if (zone && this.mapRenderer.isWalkable(zone.x, zone.y)) {
+    if (this.idleZones.length > 0 && this.reserveIdleZone) {
+      const zone = this.reserveIdleZone(this.agentId, cur);
+      if (zone) {
         const wasWandering = this.wandering;
         this.moveTo(zone);
         this.wandering = wasWandering;
