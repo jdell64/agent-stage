@@ -127,7 +127,7 @@ import {
   type NewFloorInfo
 } from '../shared/floors';
 import { BuildingMemory } from './buildingMemory';
-import { interruptKeyForProvider } from '../shared/interrupt';
+import { claimInterrupt, interruptAuditBody, interruptKeyForProvider } from '../shared/interrupt';
 
 // Dev isolation: apply MD_USER_DATA_DIR early before config, db, or hive initialize
 if (process.env.MD_USER_DATA_DIR && typeof process.env.MD_USER_DATA_DIR === 'string') {
@@ -5149,10 +5149,9 @@ ipcMain.handle('control:interrupt', (evt, agentId: unknown) => {
   const ptyId = [...map.entries()].find(([, id]) => id === agentId)?.[0];
   if (!ptyId) return { ok: false, error: `no live pty for agent: ${agentId}` };
   const now = Date.now();
-  if (now - (interruptLastAt.get(agentId) ?? 0) < INTERRUPT_DEBOUNCE_MS) {
+  if (!claimInterrupt(agentId, now, interruptLastAt, INTERRUPT_DEBOUNCE_MS)) {
     return { ok: false, error: 'interrupt already requested; please wait' };
   }
-  interruptLastAt.set(agentId, now);
   const owner = fl?.win?.webContents ?? BrowserWindow.fromWebContents(evt.sender)?.webContents ?? null;
   const meta = (fl?.hive ?? hive).registry().agents[agentId];
   const provider = inferAgentProvider(meta?.command ?? '', meta?.provider);
@@ -5168,7 +5167,7 @@ ipcMain.handle('control:interrupt', (evt, agentId: unknown) => {
       act: 'inform',
       requires_reply: false,
       subject: 'Agent interrupt used',
-      body: 'The operator interrupted your current task with Ctrl+C. Your PTY and session remain alive; continue when ready.'
+      body: interruptAuditBody(provider)
     }, 'system');
   }
   return result;

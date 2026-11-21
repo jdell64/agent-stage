@@ -80,7 +80,7 @@
     "stopAfterStepAria": "Stop this agent after the current step",
     "interrupt": "interrupt now",
     "interrupting": "interrupting…",
-    "interruptTip": "Send Ctrl+C to cancel the current task. The agent process and session stay alive.",
+    "interruptTip": "Send Esc for Claude or Ctrl+C for other agents to cancel the current task. The process and session stay alive.",
     "interruptAria": "Interrupt this agent's current task",
     "flashInterrupted": "Current task interrupted; session kept alive",
     "interruptFailed": "Could not interrupt the current task",
