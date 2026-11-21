@@ -140,10 +140,8 @@ test('prose punctuation after a URL is not part of it', () => {
   assert.deepEqual(urlsIn('read https://a.io/b, then stop'), ['https://a.io/b']);
 });
 
-test('http is deliberately not matched — the opener would refuse it', () => {
-  // app:openExternal accepts https (plus the two settings schemes) and nothing
-  // else, so underlining http:// would promise a click that cannot work.
-  assert.deepEqual(urlsIn('http://insecure.example/x'), []);
+test('http URLs are matched alongside https URLs', () => {
+  assert.deepEqual(urlsIn('http://insecure.example/x'), ['http://insecure.example/x']);
 });
 
 test('a plain path is not a URL, and a URL is not a path token', () => {
@@ -157,6 +155,7 @@ test('a plain path is not a URL, and a URL is not a path token', () => {
 
 test('a dotless host still matches, so localhost URLs are clickable', () => {
   assert.deepEqual(urlsIn('serving https://localhost:3000/app'), ['https://localhost:3000/app']);
+  assert.deepEqual(urlsIn('serving http://localhost:3000/app'), ['http://localhost:3000/app']);
 });
 
 /* ---------------------------------------------------------------- *
@@ -169,6 +168,10 @@ test('a URL yields exactly one span, and it is a url — not a path', () => {
   // Without the URL-first ordering the path matcher claims this same text as
   // drive `s:`, which is the whole defect: one underline that goes nowhere.
   assert.deepEqual(kinds('https://x.com/docs/guide.html'), ['url:https://x.com/docs/guide.html']);
+});
+
+test('an http URL yields a URL span, not a path', () => {
+  assert.deepEqual(kinds('http://x.com/docs/guide.html'), ['url:http://x.com/docs/guide.html']);
 });
 
 test('a path and a URL on one line both survive, in reading order', () => {
@@ -195,6 +198,7 @@ test('an uppercase scheme is still a URL, and reaches the opener lowercased', ()
   // matches `^https://` case-sensitively; the rest of the URL is left alone.
   assert.deepEqual(kinds('HTTPS://UPPER.COM/x'), ['url:https://UPPER.COM/x']);
   assert.deepEqual(kinds('Https://Mixed.com/a'), ['url:https://Mixed.com/a']);
+  assert.deepEqual(kinds('HTTP://Mixed.com/a'), ['url:http://Mixed.com/a']);
 });
 
 test('a balanced bracket belongs to the URL, an unbalanced one is prose', () => {
