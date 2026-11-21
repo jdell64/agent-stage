@@ -1,9 +1,28 @@
 import { describe, it, expect } from 'vitest';
-import { pickSpawnCharacter, resolveFloorCharacter, restorePersistedCharacter } from '../../src/renderer/src/scene/office/spawnCharacter';
+import { pickSpawnCharacter, resolveFloorCharacter, restorePersistedCharacter, spawnDisplayName } from '../../src/renderer/src/scene/office/spawnCharacter';
 
 const office = ['michael', 'jim', 'pam', 'dwight', 'ryan'].map((n) => ({ name: n, displayName: n[0].toUpperCase() + n.slice(1) }));
 
 describe('pickSpawnCharacter', () => {
+  it('uses the selected cast display name when a spawn has no human name', () => {
+    expect(spawnDisplayName('pam', office)).toBe('Pam');
+    expect(spawnDisplayName('unknown', office)).toBe('unknown');
+  });
+  it('uses unique generic names after the cast is exhausted, then suffixes the cast name', () => {
+    const used = [...office.map((m) => m.displayName), 'Alex', 'Bailey', 'Casey', 'Jordan', 'Morgan', 'Riley', 'Taylor', 'Quinn'];
+    expect(spawnDisplayName('pam', office, [...office.map((m) => m.displayName), ...used.slice(5, 10)])).toBe('Riley');
+    expect(spawnDisplayName('pam', office, used)).toBe('Pam 2');
+  });
+  it('keeps every overflow spawn label unique beyond cast plus generic pool', () => {
+    const labels: string[] = [];
+    for (let i = 0; i < office.length + 10; i += 1) {
+      labels.push(spawnDisplayName('pam', office, labels));
+    }
+    expect(new Set(labels).size).toBe(labels.length);
+    expect(labels).toContain('Alex');
+    expect(labels).toContain('Quinn');
+    expect(labels).toContain('Pam 2');
+  });
   it('uses the explicit character when the active theme has it', () => {
     expect(pickSpawnCharacter({ explicit: 'pam', name: 'x', id: 'w1', roster: office, used: [], fallback: 'ben' })).toBe('pam');
   });
