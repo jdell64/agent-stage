@@ -5139,6 +5139,27 @@ ipcMain.handle('control:halt', (evt, agentId: unknown) => {
   activeControl.halt(agentId);
   return activeControl.snapshot(agentId);
 });
+ipcMain.handle('control:interrupt', (evt, agentId: unknown) => {
+  if (typeof agentId !== 'string' || !agentId.trim()) return { ok: false, error: 'invalid agent id' };
+  const fl = floorForWebContents(evt.sender);
+  const map = fl?.ptyToAgent ?? ptyToAgent;
+  const ptyId = [...map.entries()].find(([, id]) => id === agentId)?.[0];
+  if (!ptyId) return { ok: false, error: `no live pty for agent: ${agentId}` };
+  const owner = fl?.win?.webContents ?? BrowserWindow.fromWebContents(evt.sender)?.webContents ?? null;
+  const result = ptyManager.write(ptyId, '\u0003', owner);
+  if (result.ok) {
+    // A routed audit message makes every emergency use durable in log.jsonl and
+    // visible to the target agent without killing its process or session.
+    (fl?.hive ?? hive).send({
+      to: agentId,
+      act: 'inform',
+      requires_reply: false,
+      subject: 'Agent interrupt used',
+      body: 'The operator interrupted your current task with Ctrl+C. Your PTY and session remain alive; continue when ready.'
+    }, 'system');
+  }
+  return result;
+});
 ipcMain.handle('control:snapshot', (evt, agentId: unknown) => {
   if (typeof agentId !== 'string') return null;
   const activeControl = floorForWebContents(evt.sender)?.control ?? control;
