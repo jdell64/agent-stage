@@ -522,6 +522,13 @@ export class HiveManager {
     }
     return join(root, 'hooks.sock');
   }
+  /** Previous Windows endpoint kept alive during upgrades for already-running agents. */
+  legacySockPath(platform = process.platform): string | null {
+    const root = this.root();
+    if (!root || platform !== 'win32') return null;
+    const id = createHash('sha1').update(root).digest('hex').slice(0, 12);
+    return `\\\\.\\pipe\\munder-difflin-${id}`;
+  }
   private shimPath(): string | null {
     const root = this.root();
     return root ? join(root, 'bin', 'cth-hook.cjs') : null;
