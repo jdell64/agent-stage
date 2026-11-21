@@ -44,6 +44,7 @@ export function AgentControlStrip({ agentId }: { agentId: string }) {
   const [steer, setSteer] = useState('');
   const [note, setNote] = useState('');
   const [restarting, setRestarting] = useState(false);
+  const [interrupting, setInterrupting] = useState(false);
   const [promoting, setPromoting] = useState(false);
   const noteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -68,6 +69,14 @@ export function AgentControlStrip({ agentId }: { agentId: string }) {
     const s = await window.cth.controlHalt(agentId);
     if (s) setSnap(s);
     flash(t('agentControl.flashHalt'));
+  };
+  const interrupt = async () => {
+    if (interrupting) return;
+    setInterrupting(true);
+    try {
+      const result = await window.cth.controlInterrupt(agentId);
+      flash(result.ok ? t('agentControl.flashInterrupted') : (result.error ?? t('agentControl.interruptFailed')));
+    } finally { setInterrupting(false); }
   };
   const sendSteer = async () => {
     const t_ = steer.trim();
@@ -139,6 +148,13 @@ export function AgentControlStrip({ agentId }: { agentId: string }) {
           >
             {t('agentControl.stopAfterStep')}
           </span>
+        </PixelButton>
+        <PixelButton variant="destructive" size="sm" onClick={() => { void interrupt(); }} disabled={interrupting}>
+          <span
+            className="cth-tip cth-tip-left cth-tip-wrap"
+            data-tip={t('agentControl.interruptTip')}
+            aria-label={t('agentControl.interruptAria')}
+          >{interrupting ? t('agentControl.interrupting') : t('agentControl.interrupt')}</span>
         </PixelButton>
         {/* Sits with them at the founder's call. It is a different KIND of
             control — the two above restrain the agent, this one restrains

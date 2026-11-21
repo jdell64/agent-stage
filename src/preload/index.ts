@@ -1157,6 +1157,9 @@ const api = {
   /** Request a graceful stop at the next hook boundary (#7C.3). */
   controlHalt: (agentId: string): Promise<AgentControlSnapshot | null> =>
     ipcRenderer.invoke('control:halt', agentId),
+  /** Send Ctrl+C to interrupt the current task while keeping the PTY/session alive. */
+  controlInterrupt: (agentId: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('control:interrupt', agentId),
   /** Read an agent's current control snapshot. */
   controlSnapshot: (agentId: string): Promise<AgentControlSnapshot | null> =>
     ipcRenderer.invoke('control:snapshot', agentId),
